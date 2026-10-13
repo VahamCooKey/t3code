@@ -2661,6 +2661,8 @@ const layerWsRpc = (
                 }),
             ),
           ),
+        [WS_METHODS.projectsOrchestratorJobs]: (input) =>
+          workspaceFileSystem.orchestratorJobs(input),
         [WS_METHODS.projectsReadFile]: (input) =>
           workspaceFileSystem.readFile(input).pipe(
             Effect.mapError(

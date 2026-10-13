@@ -7,8 +7,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
@@ -17,7 +20,22 @@ import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const processOutput = (stdout: string) => ({
+  stdout,
+  stderr: "",
+  code: ChildProcessSpawner.ExitCode(0),
+  timedOut: false,
+  stdoutTruncated: false,
+  stderrTruncated: false,
+  stdoutInvalidUtf8: false,
+  stderrInvalidUtf8: false,
+});
+
 const layerProject = WorkspaceFileSystem.layer.pipe(
+  Layer.provide(
+    Layer.succeed(ProcessRunner.ProcessRunner, { run: () => Effect.succeed(processOutput("[]")) }),
+  ),
   Layer.provide(WorkspacePaths.layer),
   Layer.provide(WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer))),
 );
@@ -143,6 +161,214 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           { kind: "directory" },
         ]);
       }),
+    );
+  });
+
+  describe("orchestratorJobs", () => {
+    it.effect("discovers running jobs outside registered projects and retains their history", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir;
+        const path = yield* Path.Path;
+        const command = `node "${path.join(cwd, "tools/orchestration/chain-runner.mjs")}" --cwd "${cwd}" -- node worker.mjs`;
+        const service = yield* WorkspaceFileSystem.make.pipe(
+          Effect.provideService(ProcessRunner.ProcessRunner, {
+            run: () => Effect.succeed(processOutput(encodeJson([command]))),
+          }),
+        );
+        yield* writeTextFile(
+          cwd,
+          "output/orchestration/chain-state/live.json",
+          encodeJson({
+            chainState: true,
+            chainId: "live",
+            phase: "coder_running",
+            coder: { pid: process.pid },
+          }),
+        );
+        expect((yield* service.orchestratorJobs({ cwds: [] })).jobs).toMatchObject([
+          { id: "live", category: "running", cwd },
+        ]);
+        yield* writeTextFile(
+          cwd,
+          "output/orchestration/chain-state/live.json",
+          encodeJson({
+            chainState: true,
+            chainId: "live",
+            phase: "ready_for_supervisor",
+          }),
+        );
+        expect((yield* service.orchestratorJobs({ cwds: [] })).jobs).toMatchObject([
+          { id: "live", category: "review" },
+        ]);
+      }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
+    );
+    it.effect(
+      "keeps every active job beyond the old scan limit and only five newest jobs in each other group",
+      () =>
+        Effect.gen(function* () {
+          const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+          const cwd = yield* makeTempDir;
+          const phases = ["coder_running", "ready_for_supervisor", "failed", "accepted"];
+          for (let index = 0; index < 208; index++) {
+            const phase = phases[index % phases.length]!;
+            yield* writeTextFile(
+              cwd,
+              `output/orchestration/chain-state/job-${index}.json`,
+              encodeJson({
+                chainState: true,
+                chainId: `job-${index}`,
+                phase,
+                coder: { pid: process.pid },
+                updatedAt: `2026-10-02T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}Z`,
+              }),
+            );
+          }
+          const result = yield* service.orchestratorJobs({ cwds: [cwd] });
+          expect(result.jobs.filter((job) => job.category === "running")).toHaveLength(52);
+          for (const category of ["review", "failed", "completed"])
+            expect(result.jobs.filter((job) => job.category === category)).toHaveLength(5);
+          expect(
+            result.jobs.filter((job) => job.category === "completed").map((job) => job.id),
+          ).toEqual(["job-207", "job-203", "job-199", "job-195", "job-191"]);
+          expect(result.truncated).toBe(false);
+        }),
+    );
+    it.effect("detects stopped workers without treating the checks phase as a stopped worker", () =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        for (const phase of ["coder_running", "checks_running"]) {
+          yield* writeTextFile(
+            cwd,
+            `output/orchestration/chain-state/${phase}.json`,
+            encodeJson({
+              chainState: true,
+              chainId: phase,
+              phase,
+              coder: { pid: 2147483647 },
+            }),
+          );
+        }
+        const result = yield* service.orchestratorJobs({ cwds: [cwd] });
+        expect(result.jobs.find((job) => job.id === "coder_running")?.category).toBe("failed");
+        expect(result.jobs.find((job) => job.id === "checks_running")?.category).toBe("running");
+      }),
+    );
+    it.effect.skipIf(!symlinksSupported)("skips state files linked outside the project", () =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outside = yield* makeTempDir;
+        yield* writeTextFile(
+          outside,
+          "job.json",
+          encodeJson({ chainState: true, chainId: "outside", phase: "accepted" }),
+        );
+        yield* fs.makeDirectory(path.join(cwd, "output/orchestration/chain-state"), {
+          recursive: true,
+        });
+        yield* fs.symlink(
+          path.join(outside, "job.json"),
+          path.join(cwd, "output/orchestration/chain-state/linked.json"),
+        );
+        expect(yield* service.orchestratorJobs({ cwds: [cwd] })).toEqual({
+          jobs: [],
+          skippedFiles: 1,
+          truncated: false,
+        });
+      }),
+    );
+    it.effect("reads chain stages across projects and distinguishes review from acceptance", () =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const other = yield* makeTempDir;
+        const state = (id: string, phase: string, updatedAt: string) =>
+          encodeJson({
+            chainState: true,
+            chainId: id,
+            phase,
+            updatedAt,
+            task: "Implement the feature\nDetailed instructions remain on disk",
+            coder: { model: "coder-model", pid: process.pid },
+            reviewer: { model: "reviewer-model", pid: process.pid },
+            worktree: { branch: "multi-llm/test", path: "job-worktree" },
+          });
+        yield* writeTextFile(
+          cwd,
+          "output/orchestration/chain-state/review.json",
+          state("review", "ready_for_supervisor", "2026-10-02T10:00:00Z"),
+        );
+        yield* writeTextFile(
+          other,
+          "output/orchestration/chain-state/running.json",
+          state("running", "reviewer_running", "2026-10-02T11:00:00Z"),
+        );
+        yield* writeTextFile(
+          cwd,
+          "output/orchestration/chain-state/done.json",
+          state("done", "accepted", "2026-10-02T09:00:00Z"),
+        );
+        const result = yield* service.orchestratorJobs({ cwds: [cwd, other, cwd] });
+        expect(result.jobs.map((job) => [job.id, job.category])).toEqual([
+          ["running", "running"],
+          ["review", "review"],
+          ["done", "completed"],
+        ]);
+        expect(result.jobs[0]).toMatchObject({
+          model: "reviewer-model",
+          task: "Implement the feature",
+          branch: "multi-llm/test",
+        });
+        expect(result.skippedFiles).toBe(0);
+      }),
+    );
+    it.effect("handles absent job folders and skips incomplete or oversized state", () =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        expect(yield* service.orchestratorJobs({ cwds: [cwd] })).toEqual({
+          jobs: [],
+          skippedFiles: 0,
+          truncated: false,
+        });
+        yield* writeTextFile(cwd, "output/orchestration/chain-state/incomplete.json", "{");
+        yield* writeTextFile(cwd, "output/orchestration/chain-state/not-a-job.json", "{}");
+        yield* writeTextFile(
+          cwd,
+          "output/orchestration/chain-state/large.json",
+          " ".repeat(1024 * 1024 + 1),
+        );
+        const result = yield* service.orchestratorJobs({ cwds: [cwd] });
+        expect(result).toEqual({ jobs: [], skippedFiles: 3, truncated: false });
+      }),
+    );
+    it.effect(
+      "maps failures and unknown phases to needs attention without returning worker internals",
+      () =>
+        Effect.gen(function* () {
+          const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+          const cwd = yield* makeTempDir;
+          for (const phase of ["failed", "needs_supervisor", "future_phase"]) {
+            yield* writeTextFile(
+              cwd,
+              `output/orchestration/chain-state/${phase}.json`,
+              encodeJson({
+                chainState: true,
+                chainId: phase,
+                phase,
+                secret: "not-for-the-client",
+                coder: { sessionId: "private-session" },
+              }),
+            );
+          }
+          const result = yield* service.orchestratorJobs({ cwds: [cwd] });
+          expect(result.jobs.every((job) => job.category === "failed")).toBe(true);
+          expect(encodeJson(result)).not.toContain("not-for-the-client");
+          expect(encodeJson(result)).not.toContain("private-session");
+        }),
     );
   });
 

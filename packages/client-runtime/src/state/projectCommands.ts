@@ -137,6 +137,12 @@ export function createProjectEnvironmentAtoms<R, E>(
           (result, isCurrent) => fileMetadata.rememberEntries(input.cwd, result.entries, isCurrent),
         ),
     }),
+    orchestratorJobs: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:projects:orchestrator-jobs",
+      tag: WS_METHODS.projectsOrchestratorJobs,
+      staleTimeMs: 5_000,
+      idleTtlMs: 60_000,
+    }),
     readFile: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:read-file",
       tag: WS_METHODS.projectsReadFile,

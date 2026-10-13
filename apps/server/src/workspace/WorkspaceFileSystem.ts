@@ -11,6 +11,14 @@
  */
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
+import {
+  OrchestratorJobsError,
+  type OrchestratorJobsInput,
+  type OrchestratorJobsResult,
+} from "@t3tools/contracts";
+import { readOrchestratorJobs } from "./orchestratorJobs.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import { discoverOrchestratorRoots } from "./orchestratorJobDiscovery.ts";
 
 import type {
   FilesystemEntryMetadata,
@@ -113,6 +121,9 @@ export type WorkspaceFileSystemError = typeof WorkspaceFileSystemError.Type;
 export class WorkspaceFileSystem extends Context.Service<
   WorkspaceFileSystem,
   {
+    readonly orchestratorJobs: (
+      input: OrchestratorJobsInput,
+    ) => Effect.Effect<OrchestratorJobsResult, OrchestratorJobsError>;
     readonly getMetadata: (
       input: FilesystemGetMetadataInput,
     ) => Effect.Effect<FilesystemGetMetadataResult>;
@@ -148,6 +159,15 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const knownJobRoots = new Set<string>();
+  const discoverJobs = yield* discoverOrchestratorRoots().pipe(
+    Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+    Effect.provideService(FileSystem.FileSystem, fileSystem),
+    Effect.provideService(Path.Path, path),
+    Effect.orElseSucceed(() => ({ roots: [] as string[], unavailable: true })),
+    Effect.cachedWithTTL("5 seconds"),
+  );
 
   const metadataForPath = Effect.fnUntraced(function* (requestedPath: string) {
     const expandedPath = expandHomePath(requestedPath, yield* HostProcess.HomeDirectory);
@@ -395,7 +415,29 @@ export const make = Effect.gen(function* () {
     return { relativePath: target.relativePath };
   });
 
-  return WorkspaceFileSystem.of({ getMetadata, readFile, writeFile });
+  const orchestratorJobs: WorkspaceFileSystem["Service"]["orchestratorJobs"] = Effect.fn(
+    "WorkspaceFileSystem.orchestratorJobs",
+  )(function* (input) {
+    const discovered = yield* discoverJobs;
+    for (const root of discovered.roots) knownJobRoots.add(root);
+    const result = yield* readOrchestratorJobs([
+      ...new Set([...input.cwds, ...knownJobRoots]),
+    ]).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.mapError((cause) => new OrchestratorJobsError({ cwd: input.cwds[0] ?? "", cause })),
+    );
+    return {
+      ...result,
+      ...(discovered.unavailable
+        ? {
+            discoveryWarning:
+              "Could not discover running jobs on this machine. Showing jobs from known folders.",
+          }
+        : {}),
+    };
+  });
+  return WorkspaceFileSystem.of({ getMetadata, readFile, writeFile, orchestratorJobs });
 });
 
 export const layer = Layer.effect(WorkspaceFileSystem, make);
