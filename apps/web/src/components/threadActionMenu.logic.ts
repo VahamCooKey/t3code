@@ -7,6 +7,9 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
  * remains data-driven.
  */
 export type ThreadActionMenuId =
+  | "duplicate-session"
+  | "duplicate-project"
+  | "branch-project"
   | "new-thread-on-branch"
   | "filter-by-project"
   | "project-settings"
@@ -71,6 +74,7 @@ export function buildDraftActionMenuItems(options: {
 
 export interface ThreadActionMenuState {
   readonly canOperate: boolean;
+  readonly canCopyProject?: boolean;
   readonly branch: string | null;
   /**
    * Project scoping for the thread list. Null on surfaces with no scoped
@@ -91,6 +95,8 @@ export interface ThreadActionMenuState {
   /** Archive rejects a thread with an attached provider, so disable it here rather than let the action fail. */
   readonly isRunning: boolean;
   readonly supports: {
+    readonly threadDuplication?: boolean;
+    readonly projectCopy?: boolean;
     readonly settlement: boolean;
     /** Server understands thread.auto-settle.set. */
     readonly autoSettleOptOut: boolean;
@@ -123,6 +129,25 @@ export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   const items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> = [
+    ...(state.supports.threadDuplication
+      ? [{ id: "duplicate-session" as const, label: "Duplicate session", icon: "copy" }]
+      : []),
+    ...(state.supports.projectCopy
+      ? [
+          {
+            id: "duplicate-project" as const,
+            label: "Duplicate project",
+            icon: "folder",
+            disabled: !state.canCopyProject,
+          },
+          {
+            id: "branch-project" as const,
+            label: "Branch project",
+            icon: "git-branch",
+            disabled: !state.canCopyProject,
+          },
+        ]
+      : []),
     ...(state.branch
       ? [
           {

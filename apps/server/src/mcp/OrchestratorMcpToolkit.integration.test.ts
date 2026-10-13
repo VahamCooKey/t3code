@@ -1,3 +1,4 @@
+import * as ThreadLifecycle from "../orchestration-v2/ThreadLifecycleService.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
@@ -686,6 +687,7 @@ describe("orchestrator MCP toolkit", () => {
             McpHttpServer.layerThreadToolkit,
           ).pipe(
             Layer.provideMerge(McpServer.McpServer.layer),
+            Layer.provideMerge(ThreadLifecycle.layer.pipe(Layer.provide(layerOrchestration))),
             Layer.provideMerge(layerOrchestration),
             Layer.provide(layerRegistry),
             Layer.provide(layerProviderRegistry),

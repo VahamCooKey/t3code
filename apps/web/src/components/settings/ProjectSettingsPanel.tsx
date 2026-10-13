@@ -1,3 +1,6 @@
+import { useAtomValue } from "@effect/atom-react";
+import { useCopyProject } from "../../hooks/useCopyProject";
+import { environmentServerConfigsAtom } from "../../state/server";
 import { useComposerMenuState } from "../chat/useComposerMenuState";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
@@ -169,6 +172,9 @@ function ProjectDetail({
 }) {
   const navigate = useNavigate({ from: "/settings" });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const copyProject = useCopyProject();
+  const canCopy = useAtomValue(projectEnvironment.copy.permissionAtom(group.environmentId));
+  const configs = useAtomValue(environmentServerConfigsAtom);
   const { environments } = useEnvironments();
   const environmentById = useMemo(
     () => new Map(environments.map((environment) => [environment.environmentId, environment])),
@@ -539,6 +545,38 @@ function ProjectDetail({
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
         {hasMultipleCheckouts ? checkoutChoices : null}
+        {configs.get(group.environmentId)?.environment.capabilities.projectCopy === true ? (
+          <SettingsSection title="Copy project">
+            <SettingsRow
+              title="Duplicate project"
+              description="Copy the current files to a new folder. Sessions stay in the original project."
+              control={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!canCopy}
+                  onClick={() => void copyProject(representative, "duplicate")}
+                >
+                  Duplicate project
+                </Button>
+              }
+            />
+            <SettingsRow
+              title="Branch project"
+              description="Create a new Git branch and isolated worktree from the latest commit. Uncommitted files stay in the original checkout."
+              control={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!canCopy}
+                  onClick={() => void copyProject(representative, "branch")}
+                >
+                  Branch project
+                </Button>
+              }
+            />
+          </SettingsSection>
+        ) : null}
         <SettingsSection title="Danger">
           <SettingsRow
             title={

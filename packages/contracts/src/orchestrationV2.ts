@@ -138,6 +138,14 @@ export const OrchestrationV2ThreadForkSourcePoint = Schema.Union([
 ]);
 export type OrchestrationV2ThreadForkSourcePoint = typeof OrchestrationV2ThreadForkSourcePoint.Type;
 
+export const OrchestrationV2DuplicateThreadInput = Schema.Struct({
+  commandId: CommandId,
+  sourceThreadId: ThreadId,
+  targetThreadId: ThreadId,
+  creationSource: Schema.Literals(["web", "mobile", "mcp"]),
+});
+export type OrchestrationV2DuplicateThreadInput = typeof OrchestrationV2DuplicateThreadInput.Type;
+
 export const OrchestrationV2ContextTransferResolution = Schema.Union([
   Schema.Struct({
     strategy: Schema.Literal("native_fork"),

@@ -1,5 +1,21 @@
 # Working with threads
 
+## Duplicate and branch
+
+Choose **Duplicate session** from a thread's menu to continue with a copy of its
+full conversation. Finish active turns and queued messages first. The copy uses
+the same project folder; edits to files are shared between the sessions.
+
+To explore a different direction from an earlier response, choose **Branch session
+from this response** below that completed response. Later conversation stays in
+the original session.
+
+For separate files, use **Duplicate project** or **Branch project** from the thread
+menu or the project's settings. Duplicate copies the current files into a new
+folder, including uncommitted changes. Dependencies and T3 runtime data are left
+out. Branch creates a new Git branch and worktree at the latest commit; uncommitted
+files stay in the original checkout. Neither copies the project's sessions.
+
 Use a new thread for a separate task. Choose **New worktree** when its code changes
 need a separate branch and working directory.
 

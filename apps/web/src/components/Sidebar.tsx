@@ -1,3 +1,8 @@
+import { useDuplicateThread } from "../hooks/useDuplicateThread";
+import { useCopyProject } from "../hooks/useCopyProject";
+import { projectEnvironment } from "../state/projects";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { readProjects } from "../state/entities";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
@@ -2445,6 +2450,8 @@ export default function Sidebar() {
     archiveThread,
     deleteThread,
   } = useThreadActions();
+  const duplicateSession = useDuplicateThread();
+  const copyProject = useCopyProject();
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -4687,6 +4694,9 @@ export default function Sidebar() {
                 threadRef.environmentId,
                 AuthOrchestrationOperateScope,
               ),
+              canCopyProject: appAtomRegistry.get(
+                projectEnvironment.copy.permissionAtom(threadRef.environmentId),
+              ),
               branch: thread.branch ?? null,
               projectFilter: threadProjectGroup
                 ? {
@@ -4702,6 +4712,12 @@ export default function Sidebar() {
               isRegeneratingTitle,
               isRunning: !threadRuntimeCanArchive(thread.runtime),
               supports: {
+                threadDuplication:
+                  serverConfigs.get(threadRef.environmentId)?.environment.capabilities
+                    .threadDuplication === true,
+                projectCopy:
+                  serverConfigs.get(threadRef.environmentId)?.environment.capabilities
+                    .projectCopy === true,
                 settlement: supportsSettlement,
                 autoSettleOptOut: supportsAutoSettleOptOut,
                 snooze: supportsSnooze,
@@ -4724,6 +4740,21 @@ export default function Sidebar() {
           return;
         }
         switch (clicked.value) {
+          case "duplicate-session":
+            await duplicateSession(threadRef);
+            return;
+          case "duplicate-project":
+          case "branch-project": {
+            const project = readProjects().find(
+              (p) => p.environmentId === threadRef.environmentId && p.id === thread.projectId,
+            );
+            if (project)
+              await copyProject(
+                project,
+                clicked.value === "duplicate-project" ? "duplicate" : "branch",
+              );
+            return;
+          }
           case "filter-by-project":
             // This item is the only scope control here, so picking the
             // already-scoped project again is the way back to all projects.
@@ -4905,6 +4936,8 @@ export default function Sidebar() {
     },
     [
       archiveThread,
+      duplicateSession,
+      copyProject,
       attemptPin,
       attemptSettle,
       attemptSnooze,

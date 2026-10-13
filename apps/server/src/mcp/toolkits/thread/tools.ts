@@ -1,3 +1,4 @@
+import * as ThreadLifecycle from "../../../orchestration-v2/ThreadLifecycleService.ts";
 import {
   ScheduledTaskId,
   ScheduledTask,
@@ -200,6 +201,14 @@ const ThreadConfigureTool = Tool.make("t3_thread_configure", {
 }).annotate(Tool.Destructive, true);
 
 const transferResult = Schema.Struct({ sequence: NonNegativeInt, targetThreadId: ThreadId });
+const ThreadDuplicateTool = Tool.make("t3_thread_duplicate", {
+  ...commandTool,
+  description:
+    "Duplicate a stopped session with its full conversation. Omit threadId for the current session. Wait for active turns and queued messages to finish first.",
+  parameters: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
+  success: Schema.Struct({ targetThreadId: ThreadId }),
+  dependencies: [...commandTool.dependencies, ThreadLifecycle.ThreadLifecycleService],
+}).annotate(Tool.Destructive, false);
 const ThreadForkTool = Tool.make("t3_thread_fork", {
   ...commandTool,
   description:
@@ -275,6 +284,7 @@ export const ThreadToolkit = Toolkit.make(
   ScheduledTaskRunTool,
   ThreadSearchTool,
   ThreadForkTool,
+  ThreadDuplicateTool,
   ThreadMergeBackTool,
   ThreadTransfersTool,
   ThreadConfigurationTool,

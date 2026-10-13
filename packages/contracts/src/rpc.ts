@@ -1,4 +1,5 @@
 import {
+  OrchestrationV2DuplicateThreadInput,
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -222,6 +223,8 @@ import {
   OrchestrationV2ThreadLaunchError,
 } from "./orchestrationV2.ts";
 import {
+  ProjectCopyInput,
+  ProjectCopyResult,
   ProjectCreateNewInput,
   ProjectCreateNewResult,
   ProjectEnsureScratchResult,
@@ -388,6 +391,8 @@ export const WS_METHODS = {
   projectsMutate: "projects.mutate",
   projectsEnsureScratch: "projects.ensureScratch",
   projectsCreateNew: "projects.createNew",
+  projectsCopy: "projects.copy",
+  threadsDuplicate: "threads.duplicate",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -1265,6 +1270,17 @@ const WsProjectsEnsureScratchRpc = Rpc.make(WS_METHODS.projectsEnsureScratch, {
 });
 
 // Makes a folder under ServerConfig.newProjectsRoot with a first commit, then the project.
+const WsProjectsCopyRpc = Rpc.make(WS_METHODS.projectsCopy, {
+  payload: ProjectCopyInput,
+  success: ProjectCopyResult,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+});
+
+const WsThreadsDuplicateRpc = Rpc.make(WS_METHODS.threadsDuplicate, {
+  payload: OrchestrationV2DuplicateThreadInput,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+});
+
 const WsProjectsCreateNewRpc = Rpc.make(WS_METHODS.projectsCreateNew, {
   payload: ProjectCreateNewInput,
   success: ProjectCreateNewResult,
@@ -1999,6 +2015,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsEnsureScratchRpc,
   WsProjectsCreateNewRpc,
+  WsProjectsCopyRpc,
+  WsThreadsDuplicateRpc,
   WsProjectsWriteFileRpc,
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,

@@ -1,3 +1,9 @@
+import { environmentServerConfigsAtom } from "../state/server";
+import { useDuplicateThread } from "../hooks/useDuplicateThread";
+import { useCopyProject } from "../hooks/useCopyProject";
+import { projectEnvironment } from "../state/projects";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { readProjects } from "../state/entities";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import {
@@ -100,6 +106,8 @@ export function useThreadActionMenu(input: {
     deleteThread,
     markThreadUnread,
   } = useThreadActions();
+  const duplicateSession = useDuplicateThread();
+  const copyProject = useCopyProject();
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -144,11 +152,20 @@ export function useThreadActionMenu(input: {
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+          threadDuplication:
+            appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
+              ?.environment.capabilities.threadDuplication === true,
+          projectCopy:
+            appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
+              ?.environment.capabilities.projectCopy === true,
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
         const items = buildThreadActionMenuItems({
           canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+          canCopyProject: appAtomRegistry.get(
+            projectEnvironment.copy.permissionAtom(threadRef.environmentId),
+          ),
           branch: thread.branch ?? null,
           projectFilter: null,
           isPinned: thread.pinnedAt != null,
@@ -196,6 +213,18 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
+          case "duplicate-session":
+            await duplicateSession(threadRef);
+            return;
+          case "duplicate-project":
+          case "branch-project": {
+            const project = readProjects().find(
+              (p) => p.environmentId === threadRef.environmentId && p.id === thread.projectId,
+            );
+            if (project)
+              await copyProject(project, action === "duplicate-project" ? "duplicate" : "branch");
+            return;
+          }
           case "project-settings": {
             const project = projects.find(
               (candidate) =>
@@ -342,6 +371,8 @@ export function useThreadActionMenu(input: {
     },
     [
       archiveThread,
+      duplicateSession,
+      copyProject,
       confirmThreadArchive,
       confirmThreadDelete,
       confirmAndUnpinThread,

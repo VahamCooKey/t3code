@@ -116,6 +116,7 @@ import * as ServerConfig from "./config.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
+import * as ThreadLifecycle from "./orchestration-v2/ThreadLifecycleService.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
@@ -1205,6 +1206,7 @@ const layerWsRpc = (
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const projectService = yield* ProjectService.ProjectService;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
+      const threadLifecycle = yield* ThreadLifecycle.ThreadLifecycleService;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
@@ -2601,6 +2603,24 @@ const layerWsRpc = (
           managedFolders.ensureScratchProject.pipe(
             Effect.mapError(
               (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+            ),
+          ),
+        [WS_METHODS.projectsCopy]: (input) =>
+          managedFolders
+            .copyProject(input)
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+              ),
+            ),
+        [WS_METHODS.threadsDuplicate]: (input) =>
+          threadLifecycle.duplicate(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationDispatchCommandError({
+                  message: cause.cause instanceof Error ? cause.cause.message : cause.message,
+                  cause,
+                }),
             ),
           ),
         [WS_METHODS.projectsCreateNew]: (input) =>

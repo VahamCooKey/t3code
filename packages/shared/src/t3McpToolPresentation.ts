@@ -24,6 +24,7 @@ export type T3McpToolSummaryAction =
   | "workflow-stop"
   | "thread-configuration"
   | "thread-configure"
+  | "thread-duplicate"
   | "thread-fork"
   | "thread-merge"
   | "thread-search"
@@ -45,6 +46,7 @@ export type T3McpToolSummaryAction =
   | "worktree-status"
   | "project-list"
   | "project-read"
+  | "project-copy"
   | "project-create"
   | "project-update"
   | "project-delete"
@@ -294,6 +296,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "thread-configuration",
   ),
   t3_thread_configure: tool(["Set", "Setting", "Set", "thread model"], "thread-configure"),
+  t3_thread_duplicate: tool(
+    ["Duplicate", "Duplicating", "Duplicated", "a session"],
+    "thread-duplicate",
+  ),
   t3_thread_fork: tool(["Fork", "Forking", "Requested a fork of", "this thread"], "thread-fork"),
   t3_thread_merge_back: tool(
     ["Merge", "Merging", "Requested a merge of", "thread context"],
@@ -317,6 +323,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_thread_launch: tool(["Launch", "Launching", "Launched", "a project thread"], "thread-create"),
   t3_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   t3_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),
+  t3_project_copy: tool(["Copy", "Copying", "Copied", "a project"], "project-copy"),
   t3_project_create: tool(["Register", "Registering", "Registered", "a project"], "project-create"),
   t3_project_update: tool(["Update", "Updating", "Updated", "a project"], "project-update"),
   t3_project_delete: tool(["Delete", "Deleting", "Deleted", "a project"], "project-delete"),

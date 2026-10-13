@@ -538,6 +538,23 @@ export const ProjectCreateNewResult = Schema.Struct({
 });
 export type ProjectCreateNewResult = typeof ProjectCreateNewResult.Type;
 
+/** Copies the current files, or creates a new branch at HEAD in a worktree. */
+export const ProjectCopyInput = Schema.Struct({
+  commandId: CommandId,
+  sourceProjectId: ProjectId,
+  targetProjectId: ProjectId,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  mode: Schema.Literals(["duplicate", "branch"]),
+});
+export type ProjectCopyInput = typeof ProjectCopyInput.Type;
+
+export const ProjectCopyResult = Schema.Struct({
+  projectId: ProjectId,
+  workspaceRoot: TrimmedNonEmptyString,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ProjectCopyResult = typeof ProjectCopyResult.Type;
+
 export class ProjectWriteFileError extends Schema.TaggedError<ProjectWriteFileError>()(
   "ProjectWriteFileError",
   {

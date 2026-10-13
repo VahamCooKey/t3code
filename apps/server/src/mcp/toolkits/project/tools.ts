@@ -10,6 +10,8 @@ import {
   RuntimeMode,
   ProviderInteractionMode,
   Project,
+  ProjectCopyInput,
+  ProjectCopyResult,
   ProjectCreatePayload,
   ProjectUpdatePayload,
   ProjectId,
@@ -65,6 +67,15 @@ const ProjectReadTool = Tool.make("t3_project_read", {
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
+const ProjectCopyTool = Tool.make("t3_project_copy", {
+  ...shared,
+  description:
+    "Duplicate a project into a new folder, including current uncommitted files, or branch it into an isolated Git worktree at HEAD. Sessions stay in the original. Retain commandId and targetProjectId and reuse them for retries.",
+  parameters: ProjectCopyInput,
+  success: ProjectCopyResult,
+  dependencies: [...shared.dependencies, ManagedProjectFolders.ManagedProjectFolders],
+}).annotate(Tool.Destructive, false);
+
 const ProjectCreateTool = Tool.make("t3_project_create", {
   ...shared,
   description:
@@ -156,6 +167,7 @@ export const ProjectToolkit = Toolkit.make(
   ProjectListTool,
   ProjectReadTool,
   ProjectCreateTool,
+  ProjectCopyTool,
   ProjectUpdateTool,
   ProjectDeleteTool,
   ProjectCloneTool,

@@ -366,6 +366,240 @@ const TEST_IDENTITY = {
 const gitOutput = (cwd: string, args: ReadonlyArray<string>) =>
   git(cwd, args).pipe(Effect.map((result) => result.stdout.trim()));
 
+it.effect(
+  "duplicates current files and staged deletions with independent Git history and retained defaults",
+  () =>
+    withScratch(() =>
+      withGitEnv(
+        TEST_IDENTITY,
+        Effect.gen(function* () {
+          const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+          const projects = yield* ProjectService.ProjectService;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const source = yield* folders.createNamedProject({ name: "Original" });
+          yield* git(source.workspaceRoot, [
+            "remote",
+            "add",
+            "origin",
+            "https://example.com/original.git",
+          ]);
+          yield* projects.update({
+            commandId: CommandId.make("source-defaults"),
+            projectId: source.projectId,
+            defaultThreadEnvMode: "local",
+          });
+          yield* fs.writeFileString(path.join(source.workspaceRoot, "README.md"), "edited readme");
+          yield* fs.writeFileString(
+            path.join(source.workspaceRoot, "untracked.txt"),
+            "untracked content",
+          );
+          yield* git(source.workspaceRoot, ["rm", "assets/icon.svg"]);
+          for (const excluded of [".t3", "node_modules"]) {
+            yield* fs.makeDirectory(path.join(source.workspaceRoot, excluded));
+            yield* fs.writeFileString(
+              path.join(source.workspaceRoot, excluded, "private.txt"),
+              "must stay here",
+            );
+          }
+          const input = {
+            commandId: CommandId.make("duplicate"),
+            sourceProjectId: source.projectId,
+            targetProjectId: ProjectId.make("duplicate"),
+            name: "Original copy",
+            mode: "duplicate" as const,
+          };
+          const copy = yield* folders.copyProject(input);
+          assert.equal(
+            yield* fs.readFileString(path.join(copy.workspaceRoot, "README.md")),
+            "edited readme",
+          );
+          assert.equal(
+            yield* fs.readFileString(path.join(copy.workspaceRoot, "untracked.txt")),
+            "untracked content",
+          );
+          assert.isFalse(yield* fs.exists(path.join(copy.workspaceRoot, "assets/icon.svg")));
+          assert.isFalse(yield* fs.exists(path.join(copy.workspaceRoot, ".t3")));
+          assert.isFalse(yield* fs.exists(path.join(copy.workspaceRoot, "node_modules")));
+          assert.equal(
+            yield* gitOutput(copy.workspaceRoot, ["rev-parse", "HEAD"]),
+            yield* gitOutput(source.workspaceRoot, ["rev-parse", "HEAD"]),
+          );
+          assert.notEqual(
+            yield* gitOutput(copy.workspaceRoot, [
+              "rev-parse",
+              "--path-format=absolute",
+              "--git-common-dir",
+            ]),
+            yield* gitOutput(source.workspaceRoot, [
+              "rev-parse",
+              "--path-format=absolute",
+              "--git-common-dir",
+            ]),
+          );
+          assert.equal(
+            yield* gitOutput(copy.workspaceRoot, ["remote", "get-url", "origin"]),
+            "https://example.com/original.git",
+          );
+          yield* fs.writeFileString(path.join(copy.workspaceRoot, "README.md"), "copy edit");
+          assert.equal(
+            yield* fs.readFileString(path.join(source.workspaceRoot, "README.md")),
+            "edited readme",
+          );
+          const copied = Option.getOrThrow(yield* projects.getById(copy.projectId));
+          assert.equal(copied.defaultThreadEnvMode, "local");
+          assert.deepEqual(yield* folders.copyProject(input), copy);
+          assert.lengthOf((yield* projects.snapshot).projects, 2);
+        }),
+      ),
+    ),
+);
+
+it.effect("branches HEAD into an isolated worktree and can duplicate that worktree", () =>
+  withScratch(() =>
+    withGitEnv(
+      TEST_IDENTITY,
+      Effect.gen(function* () {
+        const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const source = yield* folders.createNamedProject({ name: "Source" });
+        yield* fs.writeFileString(path.join(source.workspaceRoot, "README.md"), "dirty original");
+        const branched = yield* folders.copyProject({
+          commandId: CommandId.make("branch"),
+          sourceProjectId: source.projectId,
+          targetProjectId: ProjectId.make("branch"),
+          name: "Source branch",
+          mode: "branch",
+        });
+        assert.equal(
+          yield* gitOutput(branched.workspaceRoot, ["branch", "--show-current"]),
+          branched.branch,
+        );
+        assert.equal(
+          yield* gitOutput(branched.workspaceRoot, ["rev-parse", "HEAD"]),
+          yield* gitOutput(source.workspaceRoot, ["rev-parse", "HEAD"]),
+        );
+        assert.notEqual(
+          yield* fs.readFileString(path.join(branched.workspaceRoot, "README.md")),
+          "dirty original",
+        );
+        yield* fs.writeFileString(path.join(branched.workspaceRoot, "README.md"), "branch edit");
+        assert.equal(
+          yield* fs.readFileString(path.join(source.workspaceRoot, "README.md")),
+          "dirty original",
+        );
+        const copied = yield* folders.copyProject({
+          commandId: CommandId.make("worktree-copy"),
+          sourceProjectId: branched.projectId,
+          targetProjectId: ProjectId.make("worktree-copy"),
+          name: "Worktree copy",
+          mode: "duplicate",
+        });
+        assert.equal(
+          yield* fs.readFileString(path.join(copied.workspaceRoot, "README.md")),
+          "branch edit",
+        );
+        assert.equal((yield* fs.stat(path.join(copied.workspaceRoot, ".git"))).type, "Directory");
+      }),
+    ),
+  ),
+);
+
+it.effect("copies folders without Git and refuses branching them without leaving a folder", () =>
+  withScratch(({ baseDir }) =>
+    Effect.gen(function* () {
+      const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+      const projects = yield* ProjectService.ProjectService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = path.join(baseDir, "plain");
+      yield* fs.makeDirectory(cwd);
+      yield* fs.writeFileString(path.join(cwd, "file.txt"), "plain project");
+      const source = yield* projects.create({
+        commandId: CommandId.make("plain"),
+        projectId: ProjectId.make("plain"),
+        title: "Plain",
+        workspaceRoot: cwd,
+      });
+      const input = {
+        commandId: CommandId.make("plain-copy"),
+        sourceProjectId: source.id,
+        targetProjectId: ProjectId.make("plain-copy"),
+        name: "Plain copy",
+        mode: "duplicate" as const,
+      };
+      const copy = yield* folders.copyProject(input);
+      assert.equal(
+        yield* fs.readFileString(path.join(copy.workspaceRoot, "file.txt")),
+        "plain project",
+      );
+      const error = yield* Effect.flip(
+        folders.copyProject({
+          ...input,
+          targetProjectId: ProjectId.make("plain-branch"),
+          commandId: CommandId.make("plain-branch"),
+          name: "Plain branch",
+          mode: "branch",
+        }),
+      );
+      assert.equal(error._tag, "ProjectCopyError");
+      assert.isFalse(yield* fs.exists(path.join(folders.namedProjectsRoot, "plain-branch")));
+      const taken = yield* Effect.flip(
+        folders.copyProject({ ...input, commandId: CommandId.make("different-copy") }),
+      );
+      assert.equal(taken._tag, "ProjectCopyError");
+    }),
+  ),
+);
+
+it.effect("cleans up its new branch and worktree when project registration fails", () =>
+  withScratch(
+    ({ baseDir }) =>
+      withGitEnv(
+        TEST_IDENTITY,
+        Effect.gen(function* () {
+          const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const source = yield* folders.createNamedProject({ name: "Source" });
+          const originalHead = yield* gitOutput(source.workspaceRoot, ["rev-parse", "HEAD"]);
+          const error = yield* Effect.flip(
+            folders.copyProject({
+              commandId: CommandId.make("rejected-copy"),
+              sourceProjectId: source.projectId,
+              targetProjectId: ProjectId.make("rejected-copy"),
+              name: "Rejected branch",
+              mode: "branch",
+            }),
+          );
+          assert.equal(error._tag, "NamedProjectCreateError");
+          assert.deepEqual(yield* fs.readDirectory(path.join(baseDir, "projects")), ["source"]);
+          assert.notInclude(
+            yield* gitOutput(source.workspaceRoot, ["branch", "--list"]),
+            "rejected",
+          );
+          assert.equal(yield* gitOutput(source.workspaceRoot, ["rev-parse", "HEAD"]), originalHead);
+        }),
+      ),
+    {
+      projects: (real) => ({
+        ...real,
+        create: (input) =>
+          input.projectId === "rejected-copy"
+            ? Effect.fail(
+                new ProjectService.ProjectOperationError({
+                  operation: "dispatch-project-command",
+                  projectId: input.projectId,
+                  cause: "injected failure",
+                }),
+              )
+            : real.create(input),
+      }),
+    },
+  ),
+);
+
 it.effect("starts a named project as a committed repository, and suffixes a taken name", () =>
   withScratch(({ baseDir }) =>
     withGitEnv(

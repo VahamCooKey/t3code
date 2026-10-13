@@ -1,3 +1,4 @@
+import { ProjectCopyActions } from "../projects/ProjectCopyActions";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { AppText as Text, AppTextInput } from "../../components/AppText";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
@@ -166,6 +167,7 @@ function ProjectOverviewContent(props: {
               <Text className="text-sm leading-normal text-foreground-muted" selectable>
                 {member.workspaceRoot}
               </Text>
+              <ProjectCopyActions project={member} />
             </View>
           );
         })}

@@ -59,6 +59,48 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect(
+    "requires both destination grants to copy a project, and operate to duplicate a session",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* setup;
+          const copy = createCommandPermissions(runtime, WS_METHODS.projectsCopy);
+          const duplicate = createCommandPermissions(runtime, WS_METHODS.threadsDuplicate);
+          registry.set(sessions(env), AsyncResult.success(grant(true)));
+          expect(registry.get(duplicate.permissionAtom(env))).toBe(true);
+          expect(registry.get(copy.permissionAtom(env))).toBe(false);
+          expect((yield* copy.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+            "EnvironmentAuthorizationError",
+          );
+          registry.set(
+            sessions(env),
+            AsyncResult.success({
+              ...grant(true),
+              scopes: [AuthSourceControlWriteScope],
+              permissions: [AuthSourceControlWriteScope],
+            }),
+          );
+          expect(registry.get(copy.permissionAtom(env))).toBe(false);
+          expect(registry.get(duplicate.permissionAtom(env))).toBe(false);
+          registry.set(
+            sessions(env),
+            AsyncResult.success({
+              ...grant(true),
+              scopes: [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+              permissions: [AuthOrchestrationOperateScope, AuthSourceControlWriteScope],
+            }),
+          );
+          expect(registry.get(copy.permissionAtom(env))).toBe(true);
+          yield* copy.authorize(registry, env);
+          registry.set(sessions(other), AsyncResult.success(grant(false)));
+          expect(registry.get(copy.permissionAtom(other))).toBe(false);
+          expect((yield* duplicate.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+            "EnvironmentAuthorizationError",
+          );
+        }),
+      ),
+  );
   it.effect("requires the destination settings grant to run storage cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

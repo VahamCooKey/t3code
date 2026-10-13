@@ -386,7 +386,7 @@ function AssistantForkButton(props: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Fork from this response"
+      accessibilityLabel="Branch session from this response"
       disabled={busy}
       onPress={() => {
         const targetThreadId = ThreadId.make(uuidv4());

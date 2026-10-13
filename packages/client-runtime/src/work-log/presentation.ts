@@ -615,6 +615,7 @@ function summaryActionPriority(action: ToolGroupAction | T3McpToolSummaryAction)
     case "schedule-delete":
     case "schedule-run":
     case "thread-configure":
+    case "thread-duplicate":
     case "thread-fork":
     case "thread-merge":
     case "thread-organize":
@@ -625,6 +626,7 @@ function summaryActionPriority(action: ToolGroupAction | T3McpToolSummaryAction)
     case "queue-steer":
     case "question-respond":
     case "worktree-handoff":
+    case "project-copy":
     case "project-create":
     case "project-update":
     case "project-delete":

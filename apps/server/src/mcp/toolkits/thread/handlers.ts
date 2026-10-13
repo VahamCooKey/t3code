@@ -7,6 +7,7 @@ import {
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
+import * as ThreadLifecycle from "../../../orchestration-v2/ThreadLifecycleService.ts";
 import * as Effect from "effect/Effect";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 
@@ -112,6 +113,31 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
             ? result.matches
             : result.matches.filter((match) => match.projectId === projectId),
       };
+    }),
+  ),
+  t3_thread_duplicate: writesThread((input) =>
+    Effect.gen(function* () {
+      const { projection } = yield* readThread(input.threadId);
+      const lifecycle = yield* ThreadLifecycle.ThreadLifecycleService;
+      const commandId = yield* newCommandId();
+      const targetThreadId = ThreadId.make(`${commandId}:copy`);
+      yield* lifecycle
+        .duplicate({
+          commandId,
+          sourceThreadId: projection.thread.id,
+          targetThreadId,
+          creationSource: "mcp",
+        })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestratorMcpFailure({
+                code: "orchestration_error",
+                message: error.cause instanceof Error ? error.cause.message : error.message,
+              }),
+          ),
+        );
+      return { targetThreadId };
     }),
   ),
   t3_thread_fork: writesThread((input) =>

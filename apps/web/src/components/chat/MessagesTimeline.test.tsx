@@ -1808,7 +1808,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="Fork from this response"');
+    expect(markup).toContain('aria-label="Branch session from this response"');
   });
 
   it("renders inline terminal labels with the composer chip UI", async () => {

@@ -219,6 +219,9 @@ export function summarizeT3ToolCalls(
     case "thread-configure":
       label = phrase("Set", "set", `thread model ${times}`);
       break;
+    case "thread-duplicate":
+      label = phrase("Duplicated", "duplicate", quantity(selected.length, "session"));
+      break;
     case "thread-fork":
       label = phrase("Requested", "request", quantity(selected.length, "thread fork"));
       break;
@@ -313,6 +316,9 @@ export function summarizeT3ToolCalls(
       break;
     case "project-read":
       label = phrase("Read", "read", quantity(countEntities(projectIds), "project"));
+      break;
+    case "project-copy":
+      label = phrase("Copied", "copy", quantity(countEntities(projectIds), "project"));
       break;
     case "project-create":
       label = phrase("Registered", "register", quantity(countEntities(projectIds), "project"));

@@ -1,3 +1,4 @@
+import { useDuplicateSession } from "./useDuplicateSession";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
@@ -602,6 +603,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onSetThreadAutoSettle,
     onMoveThread,
   } = props;
+  const {
+    duplicateSession,
+    supported: duplicateSupported,
+    canDuplicate,
+  } = useDuplicateSession(thread.environmentId);
   const snoozedRow = props.snoozed === true;
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
@@ -783,13 +789,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
+      ...(duplicateSupported
+        ? [
+            {
+              id: "duplicate-session",
+              title: "Duplicate session",
+              image: "doc.on.doc",
+              attributes: { disabled: !canDuplicate },
+            } satisfies MenuAction,
+          ]
+        : []),
       { id: "rename", title: "Rename", image: "square.and.pencil" },
       ...buildThreadTitleRegenerationMenuItems({
         supported: props.titleRegenerationSupported,
         isRegenerating: thread.titleRegeneration != null,
       }),
     ],
-    [props.titleRegenerationSupported, thread.titleRegeneration],
+    [props.titleRegenerationSupported, thread.titleRegeneration, duplicateSupported, canDuplicate],
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -851,6 +867,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (nativeEvent.event === "duplicate-session") void duplicateSession(thread.id);
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
@@ -886,6 +903,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     },
     [
       onNewThreadOnBranch,
+      duplicateSession,
       thread,
       handleArchive,
       handleDelete,

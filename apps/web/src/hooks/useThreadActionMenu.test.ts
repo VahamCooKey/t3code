@@ -34,6 +34,15 @@ function recordEffect(action: string) {
   state.completed.resolve();
 }
 
+vi.mock("./useDuplicateThread", () => ({ useDuplicateThread: () => vi.fn() }));
+vi.mock("./useCopyProject", () => ({ useCopyProject: () => vi.fn() }));
+vi.mock("../state/projects", () => ({
+  projectEnvironment: { copy: { permissionAtom: () => "copy-permission" } },
+}));
+vi.mock("../state/server", () => ({ environmentServerConfigsAtom: "configs" }));
+vi.mock("../rpc/atomRegistry", () => ({
+  appAtomRegistry: { get: (atom: string) => (atom === "configs" ? new Map() : false) },
+}));
 vi.mock("../components/CustomSnoozeDialog", () => ({ requestCustomSnooze: vi.fn() }));
 vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,

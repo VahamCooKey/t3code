@@ -40,6 +40,28 @@ function allIds(state: ThreadActionMenuState): string[] {
 }
 
 describe("buildThreadActionMenuItems", () => {
+  it("keeps copy actions compatible with older servers and the destination permissions", () => {
+    expect(ids(baseState)).not.toContain("duplicate-session");
+    expect(ids(baseState)).not.toContain("duplicate-project");
+    const capable = {
+      ...baseState,
+      supports: { ...baseState.supports, threadDuplication: true, projectCopy: true },
+      canCopyProject: false,
+    };
+    const items = buildThreadActionMenuItems(capable);
+    expect(items.find((item) => item.id === "duplicate-session")?.disabled).not.toBe(true);
+    expect(items.find((item) => item.id === "branch-project")?.disabled).toBe(true);
+    expect(
+      buildThreadActionMenuItems({ ...capable, canOperate: false }).find(
+        (item) => item.id === "duplicate-session",
+      )?.disabled,
+    ).toBe(true);
+    expect(
+      buildThreadActionMenuItems({ ...capable, canCopyProject: true }).find(
+        (item) => item.id === "duplicate-project",
+      )?.disabled,
+    ).not.toBe(true);
+  });
   it.each([false, true])(
     "disables both lifecycle directions without permission (reversed: %s)",
     (reversed) => {

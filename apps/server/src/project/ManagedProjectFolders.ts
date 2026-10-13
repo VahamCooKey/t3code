@@ -11,6 +11,8 @@
  */
 import {
   CommandId,
+  type ProjectCopyInput,
+  type ProjectCopyResult,
   type GitManagerServiceError,
   ProjectId,
   type ThreadId,
@@ -30,6 +32,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
@@ -97,6 +100,32 @@ export class NamedProjectCreateError extends Schema.TaggedError<NamedProjectCrea
 
 export type NamedProjectError = NamedProjectFolderError | NamedProjectCreateError;
 
+export class ProjectCopyError extends Schema.TaggedError<ProjectCopyError>()("ProjectCopyError", {
+  projectId: ProjectId,
+  reason: Schema.Literals([
+    "source_missing",
+    "target_exists",
+    "same_project",
+    "not_repository",
+    "no_commit",
+  ]),
+}) {
+  override get message(): string {
+    switch (this.reason) {
+      case "source_missing":
+        return "The source project no longer exists.";
+      case "target_exists":
+        return "The target project ID is already in use.";
+      case "same_project":
+        return "The copy needs a new project ID.";
+      case "not_repository":
+        return "Branch project requires a Git repository. Duplicate project can copy this folder.";
+      case "no_commit":
+        return "Make a first Git commit before branching this project.";
+    }
+  }
+}
+
 export class ManagedProjectFolders extends Context.Service<
   ManagedProjectFolders,
   {
@@ -115,6 +144,9 @@ export class ManagedProjectFolders extends Context.Service<
     }) => Effect.Effect<Option.Option<string>, ScratchFolderError>;
     /** The folder that holds projects started from just a name. */
     readonly namedProjectsRoot: string;
+    readonly copyProject: (
+      input: ProjectCopyInput,
+    ) => Effect.Effect<ProjectCopyResult, NamedProjectError | ProjectCopyError>;
     /**
      * Starts a project from just a name: claims `<namedProjectsRoot>/<slug>`
      * (adding `-2`, `-3`, ... when taken), makes it a Git repository with a
@@ -243,6 +275,7 @@ const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const projects = yield* ProjectService.ProjectService;
   const crypto = yield* Crypto.Crypto;
+  const copyLocks = yield* KeyedLock.make<ProjectId>();
 
   /**
    * Claims the first free folder among `folderFor(1)`, `folderFor(2)`, ...,
@@ -515,12 +548,293 @@ const make = Effect.gen(function* () {
     };
   });
 
+  const copyProject: ManagedProjectFolders["Service"]["copyProject"] = (input) =>
+    copyLocks.withLock(
+      input.targetProjectId,
+      Effect.gen(function* () {
+        if (input.sourceProjectId === input.targetProjectId)
+          return yield* new ProjectCopyError({
+            projectId: input.targetProjectId,
+            reason: "same_project",
+          });
+        const source = yield* projects
+          .getById(input.sourceProjectId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new NamedProjectCreateError({ workspaceRoot: namedProjectsRoot, cause }),
+            ),
+          );
+        const previous = yield* projects
+          .getById(input.targetProjectId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new NamedProjectCreateError({ workspaceRoot: namedProjectsRoot, cause }),
+            ),
+          );
+        const branch =
+          input.mode === "branch"
+            ? `t3/${newProjectFolderName(input.name)}-${input.targetProjectId}`
+            : null;
+        if (Option.isSome(previous)) {
+          // Re-submit through the project service to verify this command owns the target.
+          yield* projects
+            .create({
+              commandId: input.commandId,
+              projectId: input.targetProjectId,
+              title: input.name,
+              workspaceRoot: previous.value.workspaceRoot,
+            })
+            .pipe(
+              Effect.mapError(
+                () =>
+                  new ProjectCopyError({
+                    projectId: input.targetProjectId,
+                    reason: "target_exists",
+                  }),
+              ),
+            );
+          if (Option.isSome(source)) {
+            yield* projects
+              .update({
+                commandId: CommandId.make(`${input.commandId}:settings`),
+                projectId: input.targetProjectId,
+                defaultModelSelection: source.value.defaultModelSelection,
+                defaultThreadEnvMode: source.value.defaultThreadEnvMode,
+                projectIcon: source.value.projectIcon,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new NamedProjectCreateError({
+                      workspaceRoot: previous.value.workspaceRoot,
+                      cause,
+                    }),
+                ),
+              );
+          }
+          return {
+            projectId: previous.value.id,
+            workspaceRoot: previous.value.workspaceRoot,
+            branch,
+          };
+        }
+        if (Option.isNone(source))
+          return yield* new ProjectCopyError({
+            projectId: input.sourceProjectId,
+            reason: "source_missing",
+          });
+        const cwd = source.value.workspaceRoot;
+        const isRepository = yield* gitWorkflow
+          .isRepository(cwd)
+          .pipe(Effect.mapError((cause) => new NamedProjectFolderError({ folder: cwd, cause })));
+        let hasCommit = false;
+        if (isRepository) {
+          const head = yield* git
+            .execute({
+              operation: "ManagedProjectFolders.head",
+              cwd,
+              args: ["rev-parse", "--verify", "HEAD"],
+              allowNonZeroExit: true,
+              timeoutMs: 10_000,
+            })
+            .pipe(Effect.mapError((cause) => new NamedProjectFolderError({ folder: cwd, cause })));
+          hasCommit = head.exitCode === 0;
+        }
+        if (input.mode === "branch" && !isRepository)
+          return yield* new ProjectCopyError({
+            projectId: input.sourceProjectId,
+            reason: "not_repository",
+          });
+        if (input.mode === "branch" && !hasCommit)
+          return yield* new ProjectCopyError({
+            projectId: input.sourceProjectId,
+            reason: "no_commit",
+          });
+        const sourcePath = yield* fileSystem
+          .realPath(cwd)
+          .pipe(Effect.mapError((cause) => new NamedProjectFolderError({ folder: cwd, cause })));
+        const workspaceRoot = yield* claimNamedFolder(input.name);
+        const folderError = (cause: unknown) =>
+          new NamedProjectFolderError({ folder: workspaceRoot, cause });
+        // A dev data directory can sit inside the source. Never recurse into the new copy.
+        const excluded = new Set([".git", ".t3", "node_modules", ".vite-plus"]);
+        let worktreeCreated = false;
+        const prepare =
+          input.mode === "branch"
+            ? git
+                .execute({
+                  operation: "ManagedProjectFolders.branch",
+                  cwd,
+                  args: ["worktree", "add", "-b", branch!, workspaceRoot, "HEAD"],
+                  timeoutMs: 60_000,
+                })
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      worktreeCreated = true;
+                    }),
+                  ),
+                  Effect.asVoid,
+                )
+            : Effect.gen(function* () {
+                if (isRepository) {
+                  yield* git.execute({
+                    operation: "ManagedProjectFolders.clone",
+                    cwd,
+                    args: ["clone", "--local", "--no-hardlinks", "--", sourcePath, workspaceRoot],
+                    timeoutMs: 60_000,
+                  });
+                  // A local clone invents an origin pointing at the source folder.
+                  // Preserve the user's remotes so a push cannot write into that folder.
+                  yield* git.execute({
+                    operation: "ManagedProjectFolders.removeCloneOrigin",
+                    cwd: workspaceRoot,
+                    args: ["remote", "remove", "origin"],
+                    timeoutMs: 10_000,
+                  });
+                  const remotes = yield* git.execute({
+                    operation: "ManagedProjectFolders.remotes",
+                    cwd,
+                    args: ["remote"],
+                    timeoutMs: 10_000,
+                  });
+                  for (const remote of remotes.stdout.trim().split(/\r?\n/).filter(Boolean)) {
+                    const urls = yield* git.execute({
+                      operation: "ManagedProjectFolders.remoteUrls",
+                      cwd,
+                      args: ["remote", "get-url", "--all", remote],
+                      timeoutMs: 10_000,
+                    });
+                    const fetchUrls = urls.stdout.trim().split(/\r?\n/).filter(Boolean);
+                    if (fetchUrls.length === 0) continue;
+                    yield* git.execute({
+                      operation: "ManagedProjectFolders.addRemote",
+                      cwd: workspaceRoot,
+                      args: ["remote", "add", remote, fetchUrls[0]!],
+                      timeoutMs: 10_000,
+                    });
+                    for (const url of fetchUrls.slice(1))
+                      yield* git.execute({
+                        operation: "ManagedProjectFolders.addRemoteUrl",
+                        cwd: workspaceRoot,
+                        args: ["remote", "set-url", "--add", remote, url],
+                        timeoutMs: 10_000,
+                      });
+                    const pushUrls = yield* git.execute({
+                      operation: "ManagedProjectFolders.pushUrls",
+                      cwd,
+                      args: ["config", "--get-all", `remote.${remote}.pushurl`],
+                      allowNonZeroExit: true,
+                      timeoutMs: 10_000,
+                    });
+                    for (const url of pushUrls.stdout.trim().split(/\r?\n/).filter(Boolean))
+                      yield* git.execute({
+                        operation: "ManagedProjectFolders.addPushUrl",
+                        cwd: workspaceRoot,
+                        args: ["remote", "set-url", "--add", "--push", remote, url],
+                        timeoutMs: 10_000,
+                      });
+                  }
+                }
+                const copyDirectory = (
+                  from: string,
+                  to: string,
+                ): Effect.Effect<void, PlatformError.PlatformError> =>
+                  Effect.gen(function* () {
+                    const entries = yield* fileSystem.readDirectory(from);
+                    for (const name of entries) {
+                      if (excluded.has(name)) continue;
+                      const entry = path.join(from, name);
+                      if (entry === workspaceRoot) continue;
+                      const destination = path.join(to, name);
+                      // Inspect the link before stat, which follows it. Cyclic and external
+                      // directory links must stay links instead of expanding into the copy.
+                      const link = yield* fileSystem.readLink(entry).pipe(Effect.option);
+                      if (Option.isSome(link)) {
+                        yield* fileSystem.remove(destination, { force: true });
+                        yield* fileSystem.symlink(link.value, destination);
+                        continue;
+                      }
+                      const stat = yield* fileSystem.stat(entry);
+                      if (stat.type === "Directory") {
+                        yield* fileSystem.makeDirectory(destination, { recursive: true });
+                        yield* copyDirectory(entry, destination);
+                      } else {
+                        yield* fileSystem.copy(entry, destination, { overwrite: true });
+                      }
+                    }
+                  });
+                yield* copyDirectory(sourcePath, workspaceRoot);
+                // A clone checks out HEAD; remove tracked files deleted in the source too.
+                if (isRepository && hasCommit) {
+                  const deleted = yield* git.execute({
+                    operation: "ManagedProjectFolders.deletedFiles",
+                    cwd,
+                    args: ["diff", "--name-only", "--diff-filter=D", "-z", "HEAD", "--"],
+                    timeoutMs: 10_000,
+                  });
+                  for (const relative of deleted.stdout.split("\0").filter(Boolean)) {
+                    const target = path.resolve(workspaceRoot, relative);
+                    const within = path.relative(workspaceRoot, target);
+                    if (within.startsWith("..") || path.isAbsolute(within)) continue;
+                    yield* fileSystem.remove(target, { force: true });
+                  }
+                }
+              });
+        const cleanup = Effect.gen(function* () {
+          const owner = yield* projects.getByWorkspaceRoot(workspaceRoot);
+          if (Option.isSome(owner)) return;
+          if (worktreeCreated) {
+            yield* git.execute({
+              operation: "ManagedProjectFolders.removeBranchWorktree",
+              cwd,
+              args: ["worktree", "remove", "--force", workspaceRoot],
+              allowNonZeroExit: true,
+              timeoutMs: 30_000,
+            });
+            yield* git.execute({
+              operation: "ManagedProjectFolders.removeBranch",
+              cwd,
+              args: ["branch", "-D", branch!],
+              allowNonZeroExit: true,
+              timeoutMs: 10_000,
+            });
+          }
+          yield* fileSystem.remove(workspaceRoot, { recursive: true, force: true });
+        }).pipe(Effect.ignore);
+        return yield* Effect.gen(function* () {
+          yield* prepare.pipe(Effect.mapError(folderError));
+          // Creation and settings copy finish together, including on client disconnect.
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* projects.create({
+                commandId: input.commandId,
+                projectId: input.targetProjectId,
+                title: input.name,
+                workspaceRoot,
+                scripts: source.value.scripts,
+              });
+              yield* projects.update({
+                commandId: CommandId.make(`${input.commandId}:settings`),
+                projectId: input.targetProjectId,
+                defaultModelSelection: source.value.defaultModelSelection,
+                defaultThreadEnvMode: source.value.defaultThreadEnvMode,
+                projectIcon: source.value.projectIcon,
+              });
+            }),
+          ).pipe(Effect.mapError((cause) => new NamedProjectCreateError({ workspaceRoot, cause })));
+          return { projectId: input.targetProjectId, workspaceRoot, branch };
+        }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : cleanup)));
+      }),
+    );
+
   return ManagedProjectFolders.of({
     scratchRoot,
     ensureScratchProject,
     folderForThread,
     namedProjectsRoot,
     createNamedProject,
+    copyProject,
   });
 });
 

@@ -206,6 +206,15 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
       return result.value;
     }),
   ),
+  t3_project_copy: McpToolAccess.writesEnvironment((input) =>
+    ManagedProjectFolders.ManagedProjectFolders.pipe(
+      Effect.flatMap((folders) => folders.copyProject(input)),
+      Effect.mapError(
+        (error) =>
+          new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
+      ),
+    ),
+  ),
   t3_project_create: McpToolAccess.writesEnvironment(({ workspaceRoot, ...input }) =>
     Effect.gen(function* () {
       const projects = yield* Project.ProjectService;
