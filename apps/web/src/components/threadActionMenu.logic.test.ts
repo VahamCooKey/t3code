@@ -40,22 +40,37 @@ function allIds(state: ThreadActionMenuState): string[] {
 }
 
 describe("buildThreadActionMenuItems", () => {
+  it("offers membership on both menu surfaces only with server support and a destination grant", () => {
+    expect(ids(baseState)).not.toContain("session-groups");
+    const supported = { ...baseState, supports: { ...baseState.supports, sessionGroups: true } };
+    expect(
+      buildThreadActionMenuItems(supported).find((item) => item.id === "session-groups")?.disabled,
+    ).toBe(true);
+    expect(
+      buildThreadActionMenuItems({ ...supported, canManageSessionGroups: true }).find(
+        (item) => item.id === "session-groups",
+      )?.disabled,
+    ).toBe(false);
+    expect(
+      buildThreadActionMenuItems({
+        ...supported,
+        canManageSessionGroups: true,
+        canOperate: false,
+      }).find((item) => item.id === "session-groups")?.disabled,
+    ).toBe(true);
+    expect(allIds(supported)).not.toContain("duplicate-session");
+  });
   it("keeps copy actions compatible with older servers and the destination permissions", () => {
     expect(ids(baseState)).not.toContain("duplicate-session");
     expect(ids(baseState)).not.toContain("duplicate-project");
     const capable = {
       ...baseState,
-      supports: { ...baseState.supports, threadDuplication: true, projectCopy: true },
+      supports: { ...baseState.supports, projectCopy: true },
       canCopyProject: false,
     };
     const items = buildThreadActionMenuItems(capable);
-    expect(items.find((item) => item.id === "duplicate-session")?.disabled).not.toBe(true);
+    expect(ids(capable)).not.toContain("duplicate-session");
     expect(items.find((item) => item.id === "branch-project")?.disabled).toBe(true);
-    expect(
-      buildThreadActionMenuItems({ ...capable, canOperate: false }).find(
-        (item) => item.id === "duplicate-session",
-      )?.disabled,
-    ).toBe(true);
     expect(
       buildThreadActionMenuItems({ ...capable, canCopyProject: true }).find(
         (item) => item.id === "duplicate-project",

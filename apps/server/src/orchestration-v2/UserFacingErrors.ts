@@ -20,6 +20,8 @@ const CAPABILITY_REJECTION_MESSAGES: Record<string, (provider: string) => string
     `${p} cannot redirect an active run. Stop it first, then send the message.`,
   interrupt: (p) => `${p} cannot stop a run once it has started.`,
   native_fork: (p) => `${p} cannot fork this thread natively.`,
+  native_fork_boundary: (p) =>
+    `${p} has no native history boundary for this point. Branch from an earlier response instead.`,
   fork_from_turn: (p) => `${p} cannot fork from an earlier point in this thread.`,
   rollback: (p) =>
     `${p} cannot rewind its conversation, so this checkpoint cannot be restored on this thread.`,

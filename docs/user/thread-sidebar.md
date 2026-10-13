@@ -1,14 +1,17 @@
 # Working with threads
 
-## Duplicate and branch
+## Branch a conversation
 
-Choose **Duplicate session** from a thread's menu to continue with a copy of its
-full conversation. Finish active turns and queued messages first. The copy uses
-the same project folder; edits to files are shared between the sessions.
+Choose **Branch session from this response** below a response to continue from
+that point. Use the latest response to copy the current conversation, or an
+earlier response to explore a different direction. Later conversation stays in
+the original session. Both sessions use the same project folder, so file edits
+are shared.
 
-To explore a different direction from an earlier response, choose **Branch session
-from this response** below that completed response. Later conversation stays in
-the original session.
+When supported, branching keeps the provider's native conversation. A stopped
+turn can also be branched when its provider has saved a usable boundary. If that
+boundary is unavailable, choose an earlier response. Switching providers or
+accounts carries a bounded conversation handoff instead of native context.
 
 For separate files, use **Duplicate project** or **Branch project** from the thread
 menu or the project's settings. Duplicate copies the current files into a new
@@ -22,6 +25,22 @@ conversation. Duplicate project copies files without copying sessions.
 
 Use a new thread for a separate task. Choose **New worktree** when its code changes
 need a separate branch and working directory.
+
+## Group sessions across projects
+
+Create a session group from the group rail beside the thread list. Add sessions
+through **Session groups** in a thread's menu. A group can
+include sessions from different projects, folders, and providers on the same
+environment, and a session can belong to several groups. There is no group limit.
+
+Select a group to filter the list, and choose **All** to clear the filter. The rail
+uses three-letter badges; each badge also exposes the full group name. Manage a
+group to rename it, change its membership, move it up or down, or delete it.
+Deleting a group keeps its sessions and files.
+
+Groups and their order are saved on the environment and shared with its connected
+clients. Each device keeps its own selected filter. Update older environment
+servers if their groups are unavailable.
 
 ## Start a thread
 

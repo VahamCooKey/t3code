@@ -34,7 +34,14 @@ function recordEffect(action: string) {
   state.completed.resolve();
 }
 
-vi.mock("./useDuplicateThread", () => ({ useDuplicateThread: () => vi.fn() }));
+vi.mock("./useSessionGroups", () => ({
+  sessionGroupsEnvironment: {
+    updateSessionGroups: { permissionAtom: () => "groups-permission" },
+  },
+}));
+vi.mock("../components/session-groups/SessionGroupMembershipDialog", () => ({
+  openSessionGroupMembership: vi.fn(),
+}));
 vi.mock("./useCopyProject", () => ({ useCopyProject: () => vi.fn() }));
 vi.mock("../state/projects", () => ({
   projectEnvironment: { copy: { permissionAtom: () => "copy-permission" } },

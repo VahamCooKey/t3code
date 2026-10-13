@@ -127,6 +127,8 @@ import {
 } from "@t3tools/provider-core/server/subagentProjection";
 import {
   forkableSourceRunStatusError,
+  forkSourceHasNativeBoundary,
+  forkSourceProviderTurn,
   isForkableSourceRunStatus,
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
@@ -5649,14 +5651,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ? undefined
           : providerThreadForRun(sourceProjection, sourceRun);
       const sourceProviderTurnId =
-        sourceProjection === null || sourceRun === null || sourceRun.activeAttemptId === null
+        sourceProjection === null || sourceRun === null
           ? undefined
-          : (latestProviderTurnForAttempt(sourceProjection.providerTurns, sourceRun.activeAttemptId)
-              ?.id ??
-            sourceProjection.attempts.find(
-              (candidate) => candidate.id === sourceRun.activeAttemptId,
-            )?.providerTurnId ??
-            undefined);
+          : forkSourceProviderTurn(sourceProjection, sourceRun)?.id;
       if (pendingForkTransfer !== undefined) {
         if (sourceRun === null || sourceProviderThread === undefined) {
           return yield* new OrchestratorDispatchError({
@@ -5735,6 +5732,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 sameProvider:
                   pendingForkTransfer.sourceProviderInstanceId === modelSelection.instanceId,
                 hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
+                hasNativeSourceBoundary:
+                  sourceProjection !== null &&
+                  sourceProviderThread !== undefined &&
+                  forkSourceHasNativeBoundary(sourceProjection, sourceRun, sourceProviderThread),
                 sourceRunStatus: sourceRun.status,
                 fromSpecificTurn: sourceRun !== null,
               }),

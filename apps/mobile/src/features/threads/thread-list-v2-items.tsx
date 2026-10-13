@@ -1,4 +1,3 @@
-import { useDuplicateSession } from "./useDuplicateSession";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
@@ -54,6 +53,11 @@ import {
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
+import { useMobileSessionGroupEnvironment } from "./session-groups/use-mobile-session-groups";
+import {
+  sessionGroupMembershipMenu,
+  sessionGroupMembershipSelection,
+} from "./session-groups/membership-menu";
 
 /**
  * Thread List v2 renders one flat native list: rich edge-to-edge rows for
@@ -603,14 +607,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onSetThreadAutoSettle,
     onMoveThread,
   } = props;
-  const {
-    duplicateSession,
-    supported: duplicateSupported,
-    canDuplicate,
-  } = useDuplicateSession(thread.environmentId);
   const snoozedRow = props.snoozed === true;
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
+  const sessionGroups = useMobileSessionGroupEnvironment(thread.environmentId);
+  const membershipMenu = useMemo(
+    () =>
+      sessionGroups.commands.canUpdate
+        ? sessionGroupMembershipMenu(sessionGroups.groups ?? [], thread.id)
+        : [],
+    [sessionGroups.commands.canUpdate, sessionGroups.groups, thread.id],
+  );
 
   const { providerDrivers, providerIconUrl } = useMemo(() => {
     const provider = props.providers?.find(
@@ -789,23 +796,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
-      ...(duplicateSupported
-        ? [
-            {
-              id: "duplicate-session",
-              title: "Duplicate session",
-              image: "doc.on.doc",
-              attributes: { disabled: !canDuplicate },
-            } satisfies MenuAction,
-          ]
-        : []),
       { id: "rename", title: "Rename", image: "square.and.pencil" },
       ...buildThreadTitleRegenerationMenuItems({
         supported: props.titleRegenerationSupported,
         isRegenerating: thread.titleRegeneration != null,
       }),
     ],
-    [props.titleRegenerationSupported, thread.titleRegeneration, duplicateSupported, canDuplicate],
+    [props.titleRegenerationSupported, thread.titleRegeneration],
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -867,7 +864,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
-      if (nativeEvent.event === "duplicate-session") void duplicateSession(thread.id);
+      const membership = sessionGroupMembershipSelection(
+        sessionGroups.groups ?? [],
+        thread.id,
+        nativeEvent.event,
+      );
+      if (membership) {
+        if (!sessionGroups.commands.canUpdate) return;
+        void sessionGroups.commands
+          .membership(membership.id, membership.threadId, membership.member)
+          .catch((cause: unknown) => {
+            Alert.alert(
+              "Could not update group",
+              cause instanceof Error ? cause.message : "Try again.",
+            );
+          });
+        return;
+      }
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
@@ -903,8 +916,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     },
     [
       onNewThreadOnBranch,
-      duplicateSession,
       thread,
+      sessionGroups,
       handleArchive,
       handleDelete,
       handleRegenerateTitle,
@@ -1359,6 +1372,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   ]
                 : []),
               { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
+              ...membershipMenu,
               ...(snoozedRow
                 ? snoozedMenuActions
                 : !props.settlementSupported

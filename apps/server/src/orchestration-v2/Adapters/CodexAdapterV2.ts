@@ -977,8 +977,13 @@ const countTerminalTurnsAfterBoundary = (
 
 const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkRollbackTurnCount")(
   function* (input: ProviderAdapter.ProviderAdapterV2ForkThreadInput) {
-    if (input.providerTurnId === undefined || input.sourceProviderTurns === undefined) {
-      return 0;
+    if (input.providerTurnId === undefined) return 0;
+    if (input.sourceProviderTurns === undefined) {
+      return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
+        driver: CODEX_PROVIDER,
+        providerThreadId: input.sourceProviderThread.id,
+        cause: "The selected fork boundary has no durable provider turn history.",
+      });
     }
 
     const rollbackTurnCount = countTerminalTurnsAfterBoundary(
@@ -1017,6 +1022,13 @@ export const resolveCodexForkBoundary = Effect.fn("CodexAdapterV2.resolveForkBou
     input.sourceProviderThread,
   ).find((turn) => turn.id === input.providerTurnId);
   const nativeTurnId = boundaryTurn?.nativeTurnRef?.nativeId;
+  if (boundaryTurn?.status === "running" || boundaryTurn?.status === "pending") {
+    return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
+      driver: CODEX_PROVIDER,
+      providerThreadId: input.sourceProviderThread.id,
+      cause: "Stop the source turn before branching its conversation.",
+    });
+  }
   if (nativeTurnId === null || nativeTurnId === undefined) {
     return { lastTurnId: undefined, rollbackTurnCount };
   }
@@ -1060,11 +1072,21 @@ const readCodexThreadHistoryMetadata = Effect.fn("CodexAdapterV2.readThreadHisto
 
 export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRollbackTurnCount")(
   function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
-    const providerTurns = input.providerThreadTurns;
+    const providerTurns = providerTurnsForThread(input.providerThreadTurns, input.providerThread);
     switch (input.target.type) {
       case "thread_start":
         return providerTurns.filter(isTerminalProviderTurn).length;
       case "provider_turn": {
+        if (
+          input.target.providerTurn.status === "running" ||
+          input.target.providerTurn.status === "pending"
+        ) {
+          return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
+            driver: CODEX_PROVIDER,
+            providerThreadId: input.providerThread.id,
+            cause: "Stop the target turn before rewinding its conversation.",
+          });
+        }
         if (input.target.providerTurn.providerThreadId !== input.providerThread.id) {
           return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
             driver: CODEX_PROVIDER,
@@ -7224,17 +7246,64 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   runtimeRequests: [],
                 };
               }
-              // Codex 0.156 can revert paginated history at a turn boundary.
-              // Legacy history no longer has a rollback endpoint.
+              // Paginated sessions rewind in place. Legacy sessions retain
+              // their history by forking through the exact native boundary.
               const { historyMode, loaded } = yield* ensureInitialized.pipe(
                 Effect.andThen(readCodexThreadHistoryMetadata(client.raw, threadId)),
               );
+              const runtimeParams = codexThreadRuntimeParams({
+                mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
+                modelSelection: input.modelSelection,
+                runtimePolicy: input.runtimePolicy,
+              });
               if (historyMode !== "paginated") {
-                return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
-                  driver: CODEX_PROVIDER,
-                  providerThreadId: threadInput.providerThread.id,
-                  cause: `Cannot roll back Codex thread ${threadId}: the thread uses legacy history, which Codex 0.156 cannot revert.`,
-                });
+                if (
+                  threadInput.target.type === "provider_turn" &&
+                  !threadInput.target.providerTurn.nativeTurnRef?.nativeId
+                ) {
+                  return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
+                    driver: CODEX_PROVIDER,
+                    providerThreadId: threadInput.providerThread.id,
+                    cause:
+                      "This legacy Codex session has no native cursor for the selected rewind point. Branch from an earlier response instead.",
+                  });
+                }
+                const response =
+                  threadInput.target.type === "thread_start"
+                    ? yield* client.request("thread/start", runtimeParams)
+                    : yield* client.request("thread/fork", {
+                        threadId,
+                        lastTurnId: threadInput.target.providerTurn.nativeTurnRef!.nativeId!,
+                        excludeTurns: true,
+                        ...runtimeParams,
+                      });
+                turnTokenUsageByThread.delete(threadId);
+                return {
+                  providerThread: {
+                    ...threadInput.providerThread,
+                    nativeThreadRef: {
+                      driver: CODEX_PROVIDER,
+                      nativeId: response.thread.id,
+                      strength: "strong" as const,
+                    },
+                    nativeConversationHeadRef,
+                    contextUsage: null,
+                    firstRunOrdinal:
+                      threadInput.target.type === "thread_start"
+                        ? null
+                        : threadInput.providerThread.firstRunOrdinal,
+                    lastRunOrdinal:
+                      threadInput.target.appRunOrdinal === 0
+                        ? null
+                        : threadInput.target.appRunOrdinal,
+                    status: "idle" as const,
+                    updatedAt: codexTimestamp(response.thread.updatedAt),
+                  },
+                  providerTurns: [],
+                  messages: [],
+                  runtimeRequests: [],
+                  providerPayload: response.thread,
+                };
               }
               // `thread/revert` only acts on a thread loaded in this app-server
               // process. After a restart or idle release, load it the same way

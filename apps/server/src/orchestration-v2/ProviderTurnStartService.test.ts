@@ -2,10 +2,12 @@ import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
   CheckpointScopeId,
+  ContextTransferId,
   MessageId,
   NodeId,
   ProviderSessionId,
   ProviderThreadId,
+  ProviderTurnId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
@@ -171,6 +173,7 @@ function makeLocalCommandHarness(input: {
   readonly writeFailure?: unknown;
   /** Loads the thread and starts the run, then fails every later state read. */
   readonly failReadsAfterRunning?: boolean;
+  readonly nativeForkSourceState?: "advanced" | "rolled_back" | "active";
 }) {
   const now = DateTime.makeUnsafe("2026-09-04T12:00:00Z");
   const threadId = ThreadId.make("thread-native-account-command");
@@ -342,6 +345,106 @@ function makeLocalCommandHarness(input: {
     checkpoints: [],
     updatedAt: now,
   };
+  const sourceThreadId = ThreadId.make("source-native-fork");
+  const sourceRun = {
+    ...run,
+    id: RunId.make("source-native-fork-run"),
+    threadId: sourceThreadId,
+    ordinal: input.nativeForkSourceState === "active" ? 2 : 1,
+    status:
+      input.nativeForkSourceState === "rolled_back"
+        ? ("rolled_back" as const)
+        : ("cancelled" as const),
+    startedAt: null,
+    activeAttemptId: null,
+  };
+  const sourceProjection = {
+    ...projection,
+    thread: { ...projection.thread, id: sourceThreadId },
+    runs: [
+      sourceRun,
+      {
+        ...sourceRun,
+        id: RunId.make("advanced-native-run"),
+        ordinal: input.nativeForkSourceState === "active" ? 1 : 2,
+        status:
+          input.nativeForkSourceState === "active" ? ("running" as const) : ("completed" as const),
+        activeAttemptId:
+          input.nativeForkSourceState === "active"
+            ? RunAttemptId.make("active-source-attempt")
+            : null,
+        startedAt: now,
+      },
+    ],
+    providerThreads: [
+      {
+        ...providerThread,
+        nativeThreadRef: {
+          driver: providerThread.driver,
+          nativeId: "native-source",
+          strength: "strong" as const,
+        },
+      },
+    ],
+    attempts:
+      input.nativeForkSourceState === "active"
+        ? [
+            {
+              ...projection.attempts[0]!,
+              id: RunAttemptId.make("active-source-attempt"),
+              runId: RunId.make("advanced-native-run"),
+              providerTurnId: ProviderTurnId.make("active-source-turn"),
+              status: "running" as const,
+              startedAt: now,
+            },
+          ]
+        : [],
+    providerTurns:
+      input.nativeForkSourceState === "active"
+        ? [
+            {
+              id: ProviderTurnId.make("active-source-turn"),
+              providerThreadId,
+              nodeId: rootNodeId,
+              runAttemptId: RunAttemptId.make("active-source-attempt"),
+              nativeTurnRef: {
+                driver: providerThread.driver,
+                nativeId: "active-native-turn",
+                strength: "strong" as const,
+              },
+              ordinal: 1,
+              status: "running" as const,
+              startedAt: now,
+              completedAt: null,
+            },
+          ]
+        : [],
+  };
+  if (input.nativeForkSourceState !== undefined) {
+    projection = {
+      ...projection,
+      contextTransfers: [
+        {
+          id: ContextTransferId.make("pending-native-fork"),
+          type: "fork",
+          sourceThreadId,
+          targetThreadId: threadId,
+          sourcePoint: { threadId: sourceThreadId, runId: sourceRun.id },
+          basePoint: null,
+          sourceProviderInstanceId: newInstanceId,
+          targetProviderInstanceId: newInstanceId,
+          targetRunId: runId,
+          status: "pending",
+          resolution: null,
+          createdBy: "user",
+          error: null,
+          createdAt: now,
+          updatedAt: now,
+          consumedAt: null,
+        },
+      ],
+    };
+  }
   if ("historyReadFailureAfterFallback" in input) {
     const nativeThreadRef = {
       driver: providerThread.driver,
@@ -393,45 +496,48 @@ function makeLocalCommandHarness(input: {
       ),
     ensureThread: () => Effect.succeed(providerThread),
   };
+  const forkThread = vi.fn(() => Effect.succeed(providerThread));
   const open = vi.fn(() =>
     input.interruptOpen === true
       ? Effect.interrupt
-      : "historyReadFailureAfterFallback" in input
-        ? Effect.succeed(resumeFallbackSession as never)
-        : "ensureThreadFailure" in input
-          ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
-          : "openFailure" in input
-            ? Effect.sync(() => {
-                if (input.interruptRunBeforeOpenFailure === true) interruptRun();
-              }).pipe(
-                Effect.andThen(
-                  Effect.fail(
-                    new ProviderSessionManager.ProviderSessionOpenError({
-                      instanceId: newInstanceId,
-                      providerSessionId,
-                      cause: input.openFailure,
-                    }),
+      : input.nativeForkSourceState !== undefined
+        ? Effect.succeed({ driver: providerThread.driver, forkThread } as never)
+        : "historyReadFailureAfterFallback" in input
+          ? Effect.succeed(resumeFallbackSession as never)
+          : "ensureThreadFailure" in input
+            ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
+            : "openFailure" in input
+              ? Effect.sync(() => {
+                  if (input.interruptRunBeforeOpenFailure === true) interruptRun();
+                }).pipe(
+                  Effect.andThen(
+                    Effect.fail(
+                      new ProviderSessionManager.ProviderSessionOpenError({
+                        instanceId: newInstanceId,
+                        providerSessionId,
+                        cause: input.openFailure,
+                      }),
+                    ),
                   ),
-                ),
-              )
-            : input.failReadsAfterRunning === true
-              ? Effect.succeed({
-                  driver: providerThread.driver,
-                  providerSession: {
-                    id: providerSessionId,
+                )
+              : input.failReadsAfterRunning === true
+                ? Effect.succeed({
                     driver: providerThread.driver,
-                    providerInstanceId: newInstanceId,
-                    status: "ready",
-                    cwd: "/tmp/native-account-command",
-                    model: null,
-                    capabilities: CodexProviderCapabilitiesV2,
-                    createdAt: now,
-                    updatedAt: now,
-                    lastError: null,
-                  },
-                  ensureThread: () => Effect.succeed(providerThread),
-                } as never)
-              : Effect.die("A local command must not open a native session."),
+                    providerSession: {
+                      id: providerSessionId,
+                      driver: providerThread.driver,
+                      providerInstanceId: newInstanceId,
+                      status: "ready",
+                      cwd: "/tmp/native-account-command",
+                      model: null,
+                      capabilities: CodexProviderCapabilitiesV2,
+                      createdAt: now,
+                      updatedAt: now,
+                      lastError: null,
+                    },
+                    ensureThread: () => Effect.succeed(providerThread),
+                  } as never)
+                : Effect.die("A local command must not open a native session."),
   );
   const startRootRun = vi.fn<
     (input: RunExecutionService.RunExecutionServiceV2StartRootRunInput) => Effect.Effect<void>
@@ -495,6 +601,7 @@ function makeLocalCommandHarness(input: {
         Layer.mock(GitWorkflow.GitWorkflowService)({}),
         Layer.mock(ProjectService.ProjectService)({}),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadRecords: () => Effect.succeed(sourceProjection),
           getTurnStartContext: () =>
             Effect.succeed({
               ...projection,
@@ -532,6 +639,7 @@ function makeLocalCommandHarness(input: {
   );
   return {
     open,
+    forkThread,
     writeIfRunCurrent,
     startRootRun,
     tryHandlePromptCommand,
@@ -855,3 +963,28 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
       }),
   );
 }
+
+effectIt.effect.each(["advanced", "rolled_back", "active"] as const)(
+  "revalidates a native source that is %s before materializing its fork",
+  (nativeForkSourceState) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({ text: "Continue", nativeForkSourceState });
+      const error = yield* harness.startWithRetry.pipe(Effect.flip);
+      expect(error._tag).toBe("ProviderTurnStartError");
+      expect(String(error.cause)).toContain("safe native fork boundary");
+      expect(harness.forkThread).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+      expect(harness.events).toHaveLength(0);
+      expect(harness.projection().runs.at(-1)?.status).toBe("starting");
+      yield* harness.start;
+      expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+      expect(harness.projection().turnItems).toMatchObject([
+        {
+          type: "error",
+          failure: { message: expect.stringContaining("safe native fork boundary") },
+        },
+      ]);
+      expect(harness.forkThread).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+    }),
+);

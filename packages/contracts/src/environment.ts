@@ -209,6 +209,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
   projectCopy: Schema.optionalKey(Schema.Boolean),
   threadDuplication: Schema.optionalKey(Schema.Boolean),
+  /** Server persists manual session groups and streams their membership. */
+  sessionGroups: Schema.optionalKey(Schema.Boolean),
   /** Server detects `platform.machine` and persists the `environmentIcon`
       setting. Older servers drop the key on write, so clients show the
       picker inert rather than offering a choice that would never stick. */

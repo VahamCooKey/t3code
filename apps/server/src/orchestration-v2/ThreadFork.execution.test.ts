@@ -39,24 +39,35 @@ const forkCases = (["codex", "claudeAgent"] as const).flatMap((driverName) => {
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: () => Effect.die("Execution is paused after dispatch for handoff inspection"),
   };
+  const targetInstanceId = ProviderInstanceId.make(`${driver}-other-account`);
+  const targetAdapter = { ...adapter, instanceId: targetInstanceId };
   const layer = ProviderReplayHarness.layerWithRegistry(
     { name: `fork-boundary-${driver}` },
-    ProviderAdapterRegistry.layerFromAdapters([adapter]),
+    ProviderAdapterRegistry.layerFromAdapters([adapter, targetAdapter]),
     { runEffectWorker: false },
   );
 
-  return (["failed", "interrupted", "cancelled"] as const).map((status) => ({
-    driver,
-    status,
-    instanceId,
-    modelSelection,
-    layer,
-  }));
+  return (["failed", "interrupted", "cancelled"] as const).flatMap((status) =>
+    (["native", "portable", "missing", "active"] as const)
+      .filter((mode) => mode !== "active" || status === "cancelled")
+      .map((mode) => ({
+        driver,
+        status,
+        instanceId,
+        modelSelection,
+        layer,
+        mode,
+        targetModelSelection:
+          mode === "portable"
+            ? { ...modelSelection, instanceId: targetInstanceId }
+            : modelSelection,
+      })),
+  );
 });
 
 it.effect.each(forkCases)(
-  "bounds $driver context when continuing a fork of a $status run",
-  ({ driver, status, instanceId, modelSelection, layer }) =>
+  "honors $mode history for $driver forks of a $status run",
+  ({ driver, status, instanceId, modelSelection, targetModelSelection, layer, mode }) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const eventSink = yield* EventSink.EventSinkV2;
@@ -110,29 +121,29 @@ it.effect.each(forkCases)(
           },
         ],
       });
-      // A cancelled queue entry has no provider turn; an early interruption
-      // can have a turn but no native assistant cursor.
-      if (status === "interrupted") {
+      // Cancelled queued input inherits the prior native boundary.
+      const boundaryRunId = status === "cancelled" ? RunId.make("previous-run") : sourceRunId;
+      if (mode === "native" || mode === "active") {
         yield* eventSink.write({
           events: [
             {
               id: EventId.make("source-attempt"),
               type: "run-attempt.created",
               threadId: sourceThreadId,
-              runId: sourceRunId,
+              runId: boundaryRunId,
               occurredAt: now,
               payload: {
                 id: attemptId,
-                runId: sourceRunId,
+                runId: boundaryRunId,
                 attemptOrdinal: 1,
                 rootNodeId,
                 providerInstanceId: instanceId,
                 providerThreadId,
                 providerTurnId,
                 reason: "initial",
-                status,
+                status: mode === "active" ? "running" : status,
                 startedAt: now,
-                completedAt: now,
+                completedAt: mode === "active" ? null : now,
               },
             },
             {
@@ -145,18 +156,23 @@ it.effect.each(forkCases)(
                 providerThreadId,
                 nodeId: rootNodeId,
                 runAttemptId: attemptId,
-                nativeTurnRef: { driver, nativeId: "turn:synthetic", strength: "weak" },
+                nativeTurnRef: { driver, nativeId: "native-source-cursor", strength: "strong" },
                 ordinal: 1,
-                status,
+                status: mode === "active" ? "running" : status,
                 startedAt: now,
-                completedAt: now,
+                completedAt: mode === "active" ? null : now,
               },
             },
           ],
         });
       }
-      for (const ordinal of [1, 2]) {
-        const runId = ordinal === 1 ? sourceRunId : RunId.make("later-run");
+      for (const ordinal of mode === "active" ? [1, 2] : [1, 2, 3]) {
+        const runId =
+          ordinal === 2
+            ? sourceRunId
+            : ordinal === 1
+              ? RunId.make("previous-run")
+              : RunId.make("later-run");
         const messageId = MessageId.make(`source-message-${ordinal}`);
         yield* eventSink.write({
           events: [
@@ -175,11 +191,14 @@ it.effect.each(forkCases)(
                 providerThreadId,
                 userMessageId: messageId,
                 rootNodeId: null,
-                activeAttemptId: ordinal === 1 && status === "interrupted" ? attemptId : null,
-                status: ordinal === 1 ? status : "completed",
+                activeAttemptId:
+                  (mode === "native" || mode === "active") && runId === boundaryRunId
+                    ? attemptId
+                    : null,
+                status: ordinal === 2 ? status : mode === "active" ? "running" : "completed",
                 queuePosition: null,
                 requestedAt: now,
-                startedAt: now,
+                startedAt: ordinal === 2 && status === "cancelled" ? null : now,
                 completedAt: now,
                 checkpointId: null,
                 contextHandoffId: null,
@@ -211,7 +230,7 @@ it.effect.each(forkCases)(
                 creationSource: "web",
                 inputIntent: "turn_start",
                 messageId,
-                text: ordinal === 1 ? "INCLUDED_SOURCE_MARKER" : "EXCLUDED_LATER_MARKER",
+                text: ordinal <= 2 ? "INCLUDED_SOURCE_MARKER" : "EXCLUDED_LATER_MARKER",
                 attachments: [],
               },
             },
@@ -227,19 +246,39 @@ it.effect.each(forkCases)(
         createdBy: "user",
         creationSource: "web",
       });
-      yield* orchestrator.dispatch({
+      const continuation = orchestrator.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make("continue-fork"),
         threadId: targetThreadId,
         messageId: MessageId.make("continue-fork"),
         text: "Continue from the selected source run",
         attachments: [],
-        modelSelection,
+        modelSelection: targetModelSelection,
         dispatchMode: { type: "start_immediately" },
         createdBy: "user",
         creationSource: "web",
       });
+      if (mode === "missing" || mode === "active") {
+        const error = yield* continuation.pipe(Effect.flip);
+        assert.instanceOf(error, Orchestrator.OrchestratorDispatchError);
+        const target = yield* orchestrator.getThreadProjection(targetThreadId);
+        assert.include(String(error.cause), "native_fork_boundary");
+        assert.lengthOf(target.runs, 0);
+        assert.lengthOf(target.providerThreads, 0);
+        assert.lengthOf(target.contextHandoffs, 0);
+        return;
+      }
+      yield* continuation;
       const target = yield* orchestrator.getThreadProjection(targetThreadId);
+      if (mode === "native") {
+        assert.lengthOf(target.contextHandoffs, 0);
+        assert.isNull(target.contextTransfers[0]?.resolution);
+        assert.deepEqual(target.providerThreads[0]?.forkedFrom, {
+          providerThreadId,
+          providerTurnId,
+        });
+        return;
+      }
       assert.equal(target.contextTransfers[0]?.resolution?.strategy, "portable_context");
       assert.lengthOf(target.contextHandoffs, 1);
       const handoff = target.contextHandoffs[0]!;

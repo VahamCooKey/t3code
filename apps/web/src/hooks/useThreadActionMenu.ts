@@ -1,5 +1,6 @@
+import { sessionGroupsEnvironment } from "./useSessionGroups";
+import { openSessionGroupMembership } from "../components/session-groups/SessionGroupMembershipDialog";
 import { environmentServerConfigsAtom } from "../state/server";
-import { useDuplicateThread } from "../hooks/useDuplicateThread";
 import { useCopyProject } from "../hooks/useCopyProject";
 import { projectEnvironment } from "../state/projects";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -106,7 +107,6 @@ export function useThreadActionMenu(input: {
     deleteThread,
     markThreadUnread,
   } = useThreadActions();
-  const duplicateSession = useDuplicateThread();
   const copyProject = useCopyProject();
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -147,14 +147,14 @@ export function useThreadActionMenu(input: {
         if (!thread) return;
         const now = new Date();
         const supports = {
+          sessionGroups:
+            appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
+              ?.environment.capabilities.sessionGroups === true,
           settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
           autoSettleOptOut: readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
-          threadDuplication:
-            appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
-              ?.environment.capabilities.threadDuplication === true,
           projectCopy:
             appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
               ?.environment.capabilities.projectCopy === true,
@@ -163,6 +163,9 @@ export function useThreadActionMenu(input: {
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
         const items = buildThreadActionMenuItems({
           canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+          canManageSessionGroups: appAtomRegistry.get(
+            sessionGroupsEnvironment.updateSessionGroups.permissionAtom(threadRef.environmentId),
+          ),
           canCopyProject: appAtomRegistry.get(
             projectEnvironment.copy.permissionAtom(threadRef.environmentId),
           ),
@@ -213,8 +216,8 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
-          case "duplicate-session":
-            await duplicateSession(threadRef);
+          case "session-groups":
+            openSessionGroupMembership(threadRef);
             return;
           case "duplicate-project":
           case "branch-project": {
@@ -375,7 +378,6 @@ export function useThreadActionMenu(input: {
     },
     [
       archiveThread,
-      duplicateSession,
       copyProject,
       confirmThreadArchive,
       confirmThreadDelete,

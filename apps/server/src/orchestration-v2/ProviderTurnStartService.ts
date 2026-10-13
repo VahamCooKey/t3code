@@ -2,7 +2,6 @@ import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   CommandId,
-  latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderThread,
@@ -26,6 +25,11 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
 import * as EventSink from "./EventSink.ts";
+import {
+  forkSourceHasNativeBoundary,
+  forkSourceProviderTurn,
+  forkSourceProviderTurns,
+} from "./ThreadForkService.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import {
   DEFAULT_HANDOFF_TOKEN_CAP,
@@ -590,7 +594,10 @@ export const layer: Layer.Layer<
       // Only the provider's own thread load fails the run on the last attempt;
       // store, id and handoff failures around it keep their typed errors.
       const loadFromProvider = (
-        load: Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapter.ProviderAdapterV2Error>,
+        load: Effect.Effect<
+          OrchestrationV2ProviderThread,
+          ProviderAdapter.ProviderAdapterV2Error | ProviderTurnStartError
+        >,
       ) =>
         Effect.gen(function* () {
           const loaded = yield* Effect.result(load);
@@ -616,24 +623,32 @@ export const layer: Layer.Layer<
           const sourceProviderThread = sourceProjection.providerThreads.find(
             (candidate) => candidate.id === sourceRun?.providerThreadId,
           );
-          const sourceAttempt = sourceProjection.attempts.find(
-            (candidate) => candidate.id === sourceRun?.activeAttemptId,
-          );
-          const sourceProviderTurn =
-            latestProviderTurnForAttempt(sourceProjection.providerTurns, sourceAttempt?.id) ??
-            sourceProjection.providerTurns.find(
-              (candidate) => candidate.id === sourceAttempt?.providerTurnId,
-            );
           if (sourceRun === undefined || sourceProviderThread === undefined) {
-            return yield* new ProviderTurnStartError({
-              runId,
-              cause: `Native fork transfer ${nativeForkTransfer.id} has no source provider execution.`,
-            });
+            return yield* loadFromProvider(
+              Effect.fail(
+                new ProviderTurnStartError({
+                  runId,
+                  cause: `Native fork transfer ${nativeForkTransfer.id} has no source provider execution.`,
+                }),
+              ),
+            );
+          }
+          const sourceProviderTurn = forkSourceProviderTurn(sourceProjection, sourceRun);
+          if (!forkSourceHasNativeBoundary(sourceProjection, sourceRun, sourceProviderThread)) {
+            return yield* loadFromProvider(
+              Effect.fail(
+                new ProviderTurnStartError({
+                  runId,
+                  cause:
+                    "The source history no longer has a safe native fork boundary. Branch from an earlier response.",
+                }),
+              ),
+            );
           }
           return yield* loadFromProvider(
             session.forkThread({
               sourceProviderThread,
-              sourceProviderTurns: sourceProjection.providerTurns,
+              sourceProviderTurns: forkSourceProviderTurns(sourceProjection),
               targetThreadId: projection.thread.id,
               modelSelection: run.modelSelection,
               runtimePolicy: resolvedRuntimePolicy,

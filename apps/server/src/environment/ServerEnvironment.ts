@@ -255,6 +255,7 @@ export const make = Effect.gen(function* () {
       projectCloneTracking: true,
       projectCopy: true,
       threadDuplication: true,
+      sessionGroups: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
       // V2 restart recovery uses the environment-owned opt-in. The old

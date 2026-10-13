@@ -1342,8 +1342,13 @@ const getNativeConversationHeadId = Effect.fnUntraced(function* (
 
 const resolveClaudeForkUpToMessageId = Effect.fn("ClaudeAdapterV2.resolveForkUpToMessageId")(
   function* (input: ProviderAdapter.ProviderAdapterV2ForkThreadInput) {
-    if (input.providerTurnId === undefined || input.sourceProviderTurns === undefined) {
-      return undefined;
+    if (input.providerTurnId === undefined) return undefined;
+    if (input.sourceProviderTurns === undefined) {
+      return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
+        driver: CLAUDE_PROVIDER,
+        providerThreadId: input.sourceProviderThread.id,
+        cause: "The selected fork boundary has no durable provider turn history.",
+      });
     }
 
     const sourceTurns = input.sourceProviderTurns
@@ -1359,18 +1364,24 @@ const resolveClaudeForkUpToMessageId = Effect.fn("ClaudeAdapterV2.resolveForkUpT
     }
 
     const boundaryNativeId = sourceTurns[boundaryIndex]?.nativeTurnRef?.nativeId;
+    const boundaryStatus = sourceTurns[boundaryIndex]?.status;
+    if (boundaryStatus === "running" || boundaryStatus === "pending") {
+      return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
+        driver: CLAUDE_PROVIDER,
+        providerThreadId: input.sourceProviderThread.id,
+        cause: "Stop the source turn before branching its conversation.",
+      });
+    }
     if (
       boundaryNativeId !== undefined &&
       boundaryNativeId !== null &&
+      sourceTurns[boundaryIndex]?.nativeTurnRef?.driver === CLAUDE_PROVIDER &&
       !isSyntheticClaudeTurnId(boundaryNativeId)
     ) {
       return boundaryNativeId;
     }
 
-    const terminalTurnsAfterBoundary = sourceTurns
-      .slice(boundaryIndex + 1)
-      .filter(isTerminalProviderTurn);
-    if (terminalTurnsAfterBoundary.length === 0) {
+    if (sourceTurns.length === boundaryIndex + 1) {
       return undefined;
     }
 

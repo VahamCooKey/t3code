@@ -1341,24 +1341,29 @@ describe("CodexAdapterV2 fork boundary", () => {
     completedAt: now,
   });
 
-  it.effect("resolves the selected provider turn to an inclusive native fork boundary", () =>
-    Effect.gen(function* () {
-      const now = yield* DateTime.now;
-      const firstTurn = makeProviderTurn("provider-turn-first", 1, "native-turn-first", now);
-      const secondTurn = makeProviderTurn("provider-turn-second", 2, "native-turn-second", now);
+  it.effect.each(["completed", "failed", "interrupted", "cancelled"] as const)(
+    "resolves a %s turn to an inclusive native fork boundary",
+    (status) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const firstTurn = {
+          ...makeProviderTurn("provider-turn-first", 1, "native-turn-first", now),
+          status,
+        };
+        const secondTurn = makeProviderTurn("provider-turn-second", 2, "native-turn-second", now);
 
-      const boundary = yield* CodexAdapterV2.resolveCodexForkBoundary({
-        sourceProviderThread: makeProviderThread(now),
-        sourceProviderTurns: [firstTurn, secondTurn],
-        providerTurnId: firstTurn.id,
-        targetThreadId: ThreadId.make("thread-codex-fork-target"),
-      });
+        const boundary = yield* CodexAdapterV2.resolveCodexForkBoundary({
+          sourceProviderThread: makeProviderThread(now),
+          sourceProviderTurns: [firstTurn, secondTurn],
+          providerTurnId: firstTurn.id,
+          targetThreadId: ThreadId.make("thread-codex-fork-target"),
+        });
 
-      assert.deepEqual(boundary, {
-        lastTurnId: "native-turn-first",
-        rollbackTurnCount: 0,
-      });
-    }),
+        assert.deepEqual(boundary, {
+          lastTurnId: "native-turn-first",
+          rollbackTurnCount: 0,
+        });
+      }),
   );
 
   it.effect("resolves the latest source turn to a native fork boundary without rollback", () =>
@@ -1415,6 +1420,25 @@ describe("CodexAdapterV2 fork boundary", () => {
       });
 
       assert.deepEqual(boundary, { lastTurnId: undefined, rollbackTurnCount: 1 });
+    }),
+  );
+
+  it.effect("rejects an active boundary and a boundary without durable history", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const turn = {
+        ...makeProviderTurn("active-turn", 1, "native-active", now),
+        status: "running" as const,
+      };
+      for (const sourceProviderTurns of [[turn], undefined]) {
+        const error = yield* CodexAdapterV2.resolveCodexForkBoundary({
+          sourceProviderThread: makeProviderThread(now),
+          ...(sourceProviderTurns === undefined ? {} : { sourceProviderTurns }),
+          providerTurnId: turn.id,
+          targetThreadId: ThreadId.make("target"),
+        }).pipe(Effect.flip);
+        assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
+      }
     }),
   );
 
@@ -7905,7 +7929,238 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     completedAt: input.now,
   });
 
-  it.effect("fails honestly when rolling back a legacy Codex thread", () =>
+  it.effect.each(["provider_turn", "thread_start"] as const)(
+    "rewinds legacy history at %s by rebinding to a native session",
+    (targetType) =>
+      Effect.gen(function* () {
+        const nativeThreadId = "legacy-rewind-source";
+        const replacementId = "legacy-rewind-replacement";
+        const method = targetType === "thread_start" ? "thread/start" : "thread/fork";
+        const transcript = makeCodexReplayTranscript({
+          scenario: `legacy-rewind-${targetType}`,
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId,
+              nativeTurnId: "unused",
+              prompt: "unused",
+            }).slice(0, 5),
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 3,
+                method: "thread/read",
+                params: { threadId: nativeThreadId, includeTurns: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              frame: { id: 3, result: { thread: { historyMode: "legacy" } } },
+            },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 4,
+                method,
+                params: {
+                  ...(targetType === "thread_start"
+                    ? {}
+                    : { threadId: nativeThreadId, lastTurnId: "native-first", excludeTurns: true }),
+                  cwd: "/workspace",
+                  model: "gpt-5.4",
+                  config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                id: 4,
+                result: codexReplayThreadResult({
+                  nativeThreadId: replacementId,
+                  forkedFromId: targetType === "thread_start" ? null : nativeThreadId,
+                }),
+              },
+            },
+          ],
+        });
+        const outbound: string[] = [];
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          () => Effect.void,
+          (method) =>
+            Effect.sync(() => {
+              outbound.push(method);
+            }),
+        );
+        const now = yield* DateTime.now;
+        const first = codexReplaySourceTurn({
+          id: "first",
+          ordinal: 1,
+          nativeId: "native-first",
+          providerThreadId: harness.providerThread.id,
+          now,
+        });
+        const second = codexReplaySourceTurn({
+          id: "second",
+          ordinal: 2,
+          nativeId: "native-second",
+          providerThreadId: harness.providerThread.id,
+          now,
+        });
+        const snapshot = yield* harness.runtime.rollbackThread({
+          providerThread: {
+            ...harness.providerThread,
+            firstRunOrdinal: 1,
+            lastRunOrdinal: 2,
+            contextUsage: { usedTokens: 1200, maxTokens: 8000 },
+          },
+          target:
+            targetType === "thread_start"
+              ? { type: "thread_start", checkpointId: CheckpointId.make("start"), appRunOrdinal: 0 }
+              : {
+                  type: "provider_turn",
+                  checkpointId: CheckpointId.make("first"),
+                  appRunOrdinal: 1,
+                  providerTurn: first,
+                },
+          providerThreadTurns: [second, first],
+        });
+        assert.equal(snapshot.providerThread.id, harness.providerThread.id);
+        assert.equal(snapshot.providerThread.nativeThreadRef?.nativeId, replacementId);
+        assert.deepEqual(
+          snapshot.providerThread.nativeConversationHeadRef,
+          targetType === "thread_start" ? null : first.nativeTurnRef,
+        );
+        assert.isNull(snapshot.providerThread.contextUsage);
+        assert.equal(
+          snapshot.providerThread.lastRunOrdinal,
+          targetType === "thread_start" ? null : 1,
+        );
+        assert.notInclude(outbound, "thread/rollback");
+        assert.notInclude(outbound, "thread/revert");
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
+  it.effect("keeps paginated rewind on thread/revert with the original native session", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "paginated-rewind-source";
+      const transcript = makeCodexReplayTranscript({
+        scenario: "paginated-rewind",
+        entries: [
+          ...codexReplayPreamble({
+            nativeThreadId,
+            nativeTurnId: "unused",
+            prompt: "unused",
+          }).slice(0, 5),
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 3,
+              method: "thread/read",
+              params: { threadId: nativeThreadId, includeTurns: false },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              id: 3,
+              result: { thread: { historyMode: "paginated", status: { type: "idle" } } },
+            },
+          },
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 4,
+              method: "thread/turns/list",
+              params: {
+                threadId: nativeThreadId,
+                cursor: null,
+                limit: 1,
+                sortDirection: "desc",
+                itemsView: "summary",
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              id: 4,
+              result: {
+                data: [{ id: "native-second", items: [], status: "completed", error: null }],
+                nextCursor: null,
+              },
+            },
+          },
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 5,
+              method: "thread/revert",
+              params: { threadId: nativeThreadId, beforeTurnId: "native-second" },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              id: 5,
+              result: codexReplayThreadResult({ nativeThreadId, forkedFromId: null }),
+            },
+          },
+        ],
+      });
+      const outbound: string[] = [];
+      const harness = yield* makeCodexReplayHarness(
+        transcript,
+        () => Effect.void,
+        (method) =>
+          Effect.sync(() => {
+            outbound.push(method);
+          }),
+      );
+      const now = yield* DateTime.now;
+      const first = codexReplaySourceTurn({
+        id: "first",
+        ordinal: 1,
+        nativeId: "native-first",
+        providerThreadId: harness.providerThread.id,
+        now,
+      });
+      const second = codexReplaySourceTurn({
+        id: "second",
+        ordinal: 2,
+        nativeId: "native-second",
+        providerThreadId: harness.providerThread.id,
+        now,
+      });
+      const snapshot = yield* harness.runtime.rollbackThread({
+        providerThread: harness.providerThread,
+        target: {
+          type: "provider_turn",
+          checkpointId: CheckpointId.make("first"),
+          appRunOrdinal: 1,
+          providerTurn: first,
+        },
+        providerThreadTurns: [second, first],
+      });
+      assert.equal(snapshot.providerThread.nativeThreadRef?.nativeId, nativeThreadId);
+      assert.deepEqual(snapshot.providerThread.nativeConversationHeadRef, first.nativeTurnRef);
+      assert.include(outbound, "thread/revert");
+      assert.notInclude(outbound, "thread/rollback");
+      assert.notInclude(outbound, "thread/fork");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("rejects a legacy rewind without a native target cursor", () =>
     Effect.gen(function* () {
       const nativeThreadId = "legacy-rollback-thread";
       const preamble = codexReplayPreamble({
@@ -7949,7 +8204,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const firstTurn = codexReplaySourceTurn({
         id: "provider-turn-first",
         ordinal: 1,
-        nativeId: "native-turn-first",
+        nativeId: null,
         providerThreadId: harness.providerThread.id,
         now,
       });
