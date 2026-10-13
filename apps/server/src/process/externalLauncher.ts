@@ -62,6 +62,7 @@ interface EditorLaunch {
   readonly target: string;
   readonly command: string;
   readonly args: ReadonlyArray<string>;
+  readonly options?: ChildProcess.CommandOptions;
 }
 
 interface ProcessLaunch {
@@ -608,6 +609,10 @@ function fileExplorerRevealLaunch(
     editor: "file-manager",
     target,
     command: powershellCommand,
+    // Detached Windows PowerShell can exit successfully without starting its
+    // child. Keep the helper attached and hide its console; unref still lets
+    // the launcher return without waiting for Explorer.
+    options: { detached: false, windowsHide: true },
     args: [
       ...POWERSHELL_ARGUMENTS_PREFIX,
       encodeUtf16LeBase64(buildFileExplorerRevealPowerShellSource("explorer.exe", explorerTarget)),
@@ -749,6 +754,7 @@ const launchEditorProcess = Effect.fn("externalLauncher.launchEditorProcess")(fu
         stdin: "ignore",
         stdout: "ignore",
         stderr: "ignore",
+        ...launch.options,
       },
     },
     (cause) =>

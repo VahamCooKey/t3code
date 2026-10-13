@@ -341,7 +341,56 @@ it.effect("reveals a file in File Explorer through PowerShell on Windows", () =>
       "$ProgressPreference = 'SilentlyContinue'; Start-Process 'explorer.exe' -ArgumentList ('/select,\"' + 'C:\\workspace with spaces\\media\\author''s clip.mp4' + '\"')",
     );
     assert.equal(spawned.options.shell, false);
+    assert.equal(spawned.options.detached, false);
+    assert.equal(spawned.options.windowsHide, true);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.skipIf(!windowsHost)(
+  "starts the reveal helper through the real Windows process spawner",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const tempDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-reveal-launch-" });
+      const recorderPath = NodePath.join(tempDir, "recorder.cmd");
+      const outputPath = NodePath.join(tempDir, "argv.txt");
+      const target = "C:/workspace with spaces/media/author's clip.mp4";
+      yield* fileSystem.writeFileString(recorderPath, `@echo off\r\n>"${outputPath}" echo(%*\r\n`);
+      let watcher: NodeFS.FSWatcher | undefined;
+      const recorded = new Promise<string>((resolve) => {
+        watcher = NodeFS.watch(tempDir, () => {
+          if (!NodeFS.existsSync(outputPath)) return;
+          const content = NodeFS.readFileSync(outputPath, "utf8").trim();
+          if (content.length > 0) resolve(content);
+        });
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => watcher?.close()));
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const launcher = yield* ExternalLauncher.make.pipe(
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make((command) => {
+            assert.ok(ChildProcess.isStandardCommand(command));
+            if (!ChildProcess.isStandardCommand(command)) return spawner.spawn(command);
+            const source = Buffer.from(command.args.at(-1) ?? "", "base64")
+              .toString("utf16le")
+              .replace("'explorer.exe'", `'${recorderPath.replaceAll("'", "''")}'`);
+            return spawner.spawn(
+              ChildProcess.make(
+                command.command,
+                [...command.args.slice(0, -1), Buffer.from(source, "utf16le").toString("base64")],
+                command.options,
+              ),
+            );
+          }),
+        ),
+      );
+      yield* launcher.launchEditor({ editor: "file-manager", cwd: target, reveal: true });
+      assert.equal(
+        yield* Effect.promise(() => recorded),
+        `/select,"${target.replaceAll("/", "\\")}"`,
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 // Real-chain smoke check for the Explorer selection contract: runs the exact
