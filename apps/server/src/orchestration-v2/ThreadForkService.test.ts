@@ -9,7 +9,11 @@ import {
   ProjectId,
   ProviderInstanceId,
   ProviderThreadId,
+  ProviderDriverKind,
   RunId,
+  RunAttemptId,
+  ProviderTurnId,
+  NodeId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -191,3 +195,215 @@ it.effect("rejects in-progress and rolled-back fork sources", () =>
     }
   }),
 );
+
+function makeNativeSource() {
+  const sourceRun = {
+    ...makeSourceRun("interrupted"),
+    activeAttemptId: RunAttemptId.make("attempt:source"),
+  };
+  const projection = makeSourceProjection(sourceRun);
+  const providerThread = {
+    id: sourceRun.providerThreadId!,
+    driver: ProviderDriverKind.make("codex"),
+    providerInstanceId,
+    providerSessionId: null,
+    appThreadId: sourceThreadId,
+    ownerNodeId: null,
+    nativeThreadRef: {
+      driver: ProviderDriverKind.make("codex"),
+      nativeId: "native:source",
+      strength: "strong" as const,
+    },
+    nativeConversationHeadRef: null,
+    status: "idle" as const,
+    firstRunOrdinal: 1,
+    lastRunOrdinal: 1,
+    handoffIds: [],
+    forkedFrom: null,
+    createdAt: sourceCreatedAt,
+    updatedAt: snoozedAt,
+  };
+  const attempt = {
+    id: sourceRun.activeAttemptId,
+    runId: sourceRun.id,
+    attemptOrdinal: 1,
+    rootNodeId: NodeId.make("node:source"),
+    providerInstanceId,
+    providerThreadId: providerThread.id,
+    providerTurnId: ProviderTurnId.make("turn:source"),
+    nativeThreadId: "native:source",
+    reason: "initial" as const,
+    status: "interrupted" as const,
+    startedAt: sourceCreatedAt,
+    completedAt: snoozedAt,
+  };
+  const turn = {
+    id: attempt.providerTurnId,
+    providerThreadId: providerThread.id,
+    nodeId: attempt.rootNodeId,
+    runAttemptId: attempt.id,
+    nativeTurnRef: {
+      driver: ProviderDriverKind.make("codex"),
+      nativeId: "native:turn",
+      strength: "strong" as const,
+    },
+    ordinal: 1,
+    status: "interrupted" as const,
+    startedAt: sourceCreatedAt,
+    completedAt: snoozedAt,
+  };
+  return {
+    sourceRun,
+    providerThread,
+    attempt,
+    turn,
+    projection: {
+      ...projection,
+      attempts: [attempt],
+      providerTurns: [turn],
+      providerThreads: [providerThread],
+    },
+  };
+}
+
+it("resolves cancelled queue entries to the last native turn by run and provider-turn ordinal", () => {
+  const { sourceRun, projection, turn, attempt } = makeNativeSource();
+  const cancelled = {
+    ...sourceRun,
+    id: RunId.make("run:queued"),
+    ordinal: 4,
+    status: "cancelled" as const,
+    startedAt: null,
+    activeAttemptId: null,
+  };
+  const rolledBack = {
+    ...sourceRun,
+    id: RunId.make("run:rolled-back"),
+    ordinal: 3,
+    status: "rolled_back" as const,
+    activeAttemptId: RunAttemptId.make("attempt:rolled-back"),
+  };
+  const latest = { ...turn, id: ProviderTurnId.make("turn:last"), ordinal: 2 };
+  const history = {
+    ...projection,
+    runs: [cancelled, rolledBack, sourceRun],
+    attempts: [attempt, { ...attempt, id: rolledBack.activeAttemptId, runId: rolledBack.id }],
+    providerTurns: [
+      {
+        ...turn,
+        id: ProviderTurnId.make("turn:rolled-back"),
+        ordinal: 3,
+        runAttemptId: rolledBack.activeAttemptId,
+      },
+      latest,
+      turn,
+    ],
+  };
+  assert.equal(ThreadForkService.forkSourceProviderTurn(history, cancelled)?.id, latest.id);
+  assert.deepEqual(
+    ThreadForkService.forkSourceProviderTurns(history).map((candidate) => candidate.id),
+    [latest.id, turn.id],
+  );
+});
+
+it("rejects head-only forks after native history advances, but ignores queued and rolled-back suffixes", () => {
+  const { sourceRun, projection, providerThread, turn } = makeNativeSource();
+  const source = { ...projection, providerTurns: [{ ...turn, nativeTurnRef: null }] };
+  const later = { ...sourceRun, id: RunId.make("run:later"), ordinal: 2, activeAttemptId: null };
+  assert.isTrue(ThreadForkService.forkSourceHasNativeBoundary(source, sourceRun, providerThread));
+  assert.isFalse(
+    ThreadForkService.forkSourceHasNativeBoundary(
+      { ...source, runs: [sourceRun, later] },
+      sourceRun,
+      providerThread,
+    ),
+  );
+  for (const suffix of [
+    { ...later, status: "rolled_back" as const },
+    { ...later, status: "queued" as const, startedAt: null },
+  ]) {
+    assert.isTrue(
+      ThreadForkService.forkSourceHasNativeBoundary(
+        { ...source, runs: [suffix, sourceRun] },
+        sourceRun,
+        providerThread,
+      ),
+    );
+  }
+  assert.isTrue(
+    ThreadForkService.forkSourceHasNativeBoundary(
+      { ...projection, runs: [later, sourceRun] },
+      sourceRun,
+      providerThread,
+    ),
+  );
+});
+
+it("rejects a cursorless head when the provider thread was rebound to a different native session", () => {
+  const { sourceRun, projection, providerThread, turn } = makeNativeSource();
+  for (const providerTurns of [[{ ...turn, nativeTurnRef: null }], []]) {
+    assert.isFalse(
+      ThreadForkService.forkSourceHasNativeBoundary({ ...projection, providerTurns }, sourceRun, {
+        ...providerThread,
+        nativeThreadRef: { ...providerThread.nativeThreadRef, nativeId: "native:replacement" },
+      }),
+    );
+  }
+});
+
+it("rejects cursorless head forks of cancelled queue entries while earlier native history is active", () => {
+  const { sourceRun, projection, providerThread, turn } = makeNativeSource();
+  const cancelled = {
+    ...sourceRun,
+    id: RunId.make("run:cancelled-queue"),
+    ordinal: 2,
+    status: "cancelled" as const,
+    startedAt: null,
+    activeAttemptId: null,
+  };
+  for (const status of ["running", "pending"] as const) {
+    const history = {
+      ...projection,
+      runs: [cancelled, { ...sourceRun, status: "running" as const }],
+      providerTurns: [{ ...turn, status, completedAt: null }],
+    };
+    assert.isUndefined(ThreadForkService.forkSourceProviderTurn(history, cancelled));
+    assert.isFalse(
+      ThreadForkService.forkSourceHasNativeBoundary(history, cancelled, providerThread),
+    );
+    // A native start may be in flight before the provider turn is projected.
+    assert.isFalse(
+      ThreadForkService.forkSourceHasNativeBoundary(
+        { ...history, providerTurns: [] },
+        cancelled,
+        providerThread,
+      ),
+    );
+    // A stale run status must not hide an active native turn either.
+    assert.isFalse(
+      ThreadForkService.forkSourceHasNativeBoundary(
+        {
+          ...history,
+          runs: [cancelled, sourceRun],
+          providerTurns: [{ ...turn, status, nativeTurnRef: null }],
+        },
+        cancelled,
+        providerThread,
+      ),
+    );
+    // Other provider threads do not mutate this native head.
+    assert.isTrue(
+      ThreadForkService.forkSourceHasNativeBoundary(
+        {
+          ...history,
+          runs: [cancelled],
+          providerTurns: [
+            { ...turn, status, providerThreadId: ProviderThreadId.make("other-provider-thread") },
+          ],
+        },
+        cancelled,
+        providerThread,
+      ),
+    );
+  }
+});

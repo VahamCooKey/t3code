@@ -977,8 +977,13 @@ const countTerminalTurnsAfterBoundary = (
 
 const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkRollbackTurnCount")(
   function* (input: ProviderAdapter.ProviderAdapterV2ForkThreadInput) {
-    if (input.providerTurnId === undefined || input.sourceProviderTurns === undefined) {
-      return 0;
+    if (input.providerTurnId === undefined) return 0;
+    if (input.sourceProviderTurns === undefined) {
+      return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
+        driver: CODEX_PROVIDER,
+        providerThreadId: input.sourceProviderThread.id,
+        cause: "The selected fork boundary has no durable provider turn history.",
+      });
     }
 
     const rollbackTurnCount = countTerminalTurnsAfterBoundary(
@@ -1017,6 +1022,13 @@ export const resolveCodexForkBoundary = Effect.fn("CodexAdapterV2.resolveForkBou
     input.sourceProviderThread,
   ).find((turn) => turn.id === input.providerTurnId);
   const nativeTurnId = boundaryTurn?.nativeTurnRef?.nativeId;
+  if (boundaryTurn?.status === "running" || boundaryTurn?.status === "pending") {
+    return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
+      driver: CODEX_PROVIDER,
+      providerThreadId: input.sourceProviderThread.id,
+      cause: "Stop the source turn before branching its conversation.",
+    });
+  }
   if (nativeTurnId === null || nativeTurnId === undefined) {
     return { lastTurnId: undefined, rollbackTurnCount };
   }

@@ -1,5 +1,6 @@
 import {
   ContextTransferId,
+  latestProviderTurnForAttempt,
   OrchestrationV2Actor,
   OrchestrationV2AppThread,
   OrchestrationV2ContextSourcePoint,
@@ -51,6 +52,104 @@ export function forkableSourceRunStatusError(
   run: Pick<OrchestrationV2Run, "id" | "status">,
 ): string {
   return `Fork source run ${run.id} is ${run.status}; in-progress and rolled-back runs cannot be forked.`;
+}
+
+/** Exclude audit turns that a rewind already removed from native history. */
+export function forkSourceProviderTurns(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "attempts" | "providerTurns">,
+) {
+  const rolledBackRuns = new Set(
+    projection.runs.filter((run) => run.status === "rolled_back").map((run) => run.id),
+  );
+  const rolledBackAttempts = new Set(
+    projection.attempts
+      .filter((attempt) => rolledBackRuns.has(attempt.runId))
+      .map((attempt) => attempt.id),
+  );
+  return projection.providerTurns.filter(
+    (turn) => turn.runAttemptId === null || !rolledBackAttempts.has(turn.runAttemptId),
+  );
+}
+
+/** Resolve the native boundary, including queued runs cancelled before delivery. */
+export function forkSourceProviderTurn(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "attempts" | "providerTurns">,
+  sourceRun: OrchestrationV2Run,
+) {
+  const providerTurns = forkSourceProviderTurns(projection);
+  const candidates =
+    sourceRun.startedAt === null
+      ? projection.runs
+          .filter(
+            (run) =>
+              run.ordinal <= sourceRun.ordinal &&
+              run.providerThreadId === sourceRun.providerThreadId &&
+              isForkableSourceRunStatus(run.status),
+          )
+          .toSorted((left, right) => right.ordinal - left.ordinal)
+      : [sourceRun];
+  for (const run of candidates) {
+    const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
+    const turn =
+      latestProviderTurnForAttempt(providerTurns, attempt?.id) ??
+      providerTurns.find((candidate) => candidate.id === attempt?.providerTurnId);
+    if (turn?.providerThreadId === sourceRun.providerThreadId) return turn;
+  }
+  return undefined;
+}
+
+/** A cursor bounds a historical fork; otherwise only an unchanged native head is safe. */
+export function forkSourceHasNativeBoundary(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "attempts" | "providerTurns">,
+  sourceRun: OrchestrationV2Run,
+  providerThread: OrchestrationV2ProviderThread,
+) {
+  if (!isForkableSourceRunStatus(sourceRun.status)) return false;
+  const turn = forkSourceProviderTurn(projection, sourceRun);
+  const cursor = turn?.nativeTurnRef;
+  if (
+    cursor?.nativeId &&
+    cursor.driver === providerThread.driver &&
+    !(cursor.driver === "claudeAgent" && cursor.nativeId.startsWith("turn:"))
+  )
+    return true;
+  const attempt = projection.attempts.find(
+    (candidate) => candidate.id === (turn?.runAttemptId ?? sourceRun.activeAttemptId),
+  );
+  if (
+    attempt?.nativeThreadId !== undefined &&
+    attempt.nativeThreadId !== providerThread.nativeThreadRef?.nativeId
+  )
+    return false;
+  return forkSourceIsNativeHead(projection, sourceRun);
+}
+
+/** A head-only fork requires settled native history that has not advanced past the cutoff. */
+function forkSourceIsNativeHead(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "attempts" | "providerTurns">,
+  sourceRun: OrchestrationV2Run,
+) {
+  const providerTurns = forkSourceProviderTurns(projection);
+  if (
+    providerTurns.some(
+      (turn) =>
+        turn.providerThreadId === sourceRun.providerThreadId &&
+        (turn.status === "running" || turn.status === "pending"),
+    )
+  )
+    return false;
+  return !projection.runs.some(
+    (run) =>
+      run.providerThreadId === sourceRun.providerThreadId &&
+      run.status !== "rolled_back" &&
+      (run.ordinal > sourceRun.ordinal || !isForkableSourceRunStatus(run.status)) &&
+      (run.startedAt !== null ||
+        projection.attempts.some(
+          (attempt) =>
+            attempt.runId === run.id &&
+            providerTurns.some((turn) => turn.runAttemptId === attempt.id),
+        )),
+  );
 }
 
 export interface ThreadForkServiceV2Shape {

@@ -54,6 +54,17 @@ describe("userFacingDispatchErrorMessage", () => {
     );
   });
 
+  it("explains missing native fork boundaries without suggesting a lossy fallback", () => {
+    assert.equal(
+      userFacingDispatchErrorMessage({
+        _tag: "CommandPolicyCapabilityUnsupportedError",
+        providerInstanceId: "claudeAgent",
+        capability: "native_fork_boundary",
+      }),
+      "Claude has no native history boundary for this point. Branch from an earlier response instead.",
+    );
+  });
+
   it("uses explicit detail fields as user-facing messages", () => {
     assert.equal(
       userFacingDispatchErrorMessage({

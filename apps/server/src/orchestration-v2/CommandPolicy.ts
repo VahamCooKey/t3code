@@ -54,6 +54,7 @@ export const CommandPolicyCapability = Schema.Literals([
   "interrupt",
   "interrupt_restart_steering",
   "native_fork",
+  "native_fork_boundary",
   "fork_from_turn",
   "rollback",
   "rollback_snapshot",
@@ -203,6 +204,7 @@ export interface CommandPolicyV2Shape {
     input: CapabilityCheckInput & {
       readonly sameProvider: boolean;
       readonly hasStrongNativeSource: boolean;
+      readonly hasNativeSourceBoundary?: boolean;
       readonly sourceRunStatus: OrchestrationV2Run["status"];
       readonly fromSpecificTurn: boolean;
     },
@@ -363,17 +365,35 @@ const ensureContextHandoff: CommandPolicyV2Shape["ensureContextHandoff"] = (inpu
 };
 
 const decideForkExecution: CommandPolicyV2Shape["decideForkExecution"] = (input) => {
-  // Unsuccessful runs may have no native turn or assistant cursor. Forking
-  // those at native head can include later turns, so use the bounded transcript.
-  const canForkNatively =
-    (input.sourceRunStatus === "completed" || input.sourceRunStatus === "waiting") &&
+  // Each adapter validates its native turn/cursor. An app-level cancellation
+  // must not replace an available native transcript with a reduced handoff.
+  const supportsNativeFork =
     input.sameProvider &&
-    input.hasStrongNativeSource &&
     input.capabilities.threads.canForkThread &&
     (!input.fromSpecificTurn || input.capabilities.threads.canForkFromTurn) &&
     input.capabilities.identity.nativeThreadIds === "strong";
 
-  if (canForkNatively) {
+  if (supportsNativeFork) {
+    if (!input.hasStrongNativeSource || input.hasNativeSourceBoundary === false) {
+      return Effect.fail(
+        unsupported(
+          input,
+          "native_fork_boundary",
+          "The selected history has no safe native fork boundary; choose an earlier response.",
+        ),
+      );
+    }
+    if (
+      input.sourceRunStatus !== "completed" &&
+      input.sourceRunStatus !== "waiting" &&
+      input.sourceRunStatus !== "failed" &&
+      input.sourceRunStatus !== "interrupted" &&
+      input.sourceRunStatus !== "cancelled"
+    ) {
+      return Effect.fail(
+        unsupported(input, "native_fork_boundary", "The source run is not settled."),
+      );
+    }
     return Effect.succeed("native_fork");
   }
 

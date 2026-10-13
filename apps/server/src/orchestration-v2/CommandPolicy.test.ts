@@ -486,6 +486,42 @@ layer("CommandPolicyV2", (it) => {
     }),
   );
 
+  it.effect("keeps stopped native runs native and rejects unavailable native boundaries", () =>
+    Effect.gen(function* () {
+      const policy = yield* CommandPolicy.CommandPolicyV2;
+      const input = {
+        commandId,
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        capabilities: CodexProviderCapabilitiesV2,
+        sameProvider: true,
+        hasStrongNativeSource: true,
+        fromSpecificTurn: true,
+      };
+      for (const sourceRunStatus of ["waiting", "failed", "interrupted", "cancelled"] as const) {
+        assert.equal(
+          yield* policy.decideForkExecution({
+            ...input,
+            sourceRunStatus,
+            hasNativeSourceBoundary: true,
+          }),
+          "native_fork",
+        );
+      }
+      for (const boundary of [
+        { hasStrongNativeSource: false },
+        { hasNativeSourceBoundary: false },
+      ]) {
+        const error = yield* policy
+          .decideForkExecution({ ...input, ...boundary, sourceRunStatus: "cancelled" })
+          .pipe(Effect.flip);
+        assert.equal(error._tag, "CommandPolicyCapabilityUnsupportedError");
+        if (error._tag === "CommandPolicyCapabilityUnsupportedError")
+          assert.equal(error.capability, "native_fork_boundary");
+      }
+    }),
+  );
+
   it.effect("falls back to portable context when Cursor cannot fork natively", () =>
     Effect.gen(function* () {
       const policy = yield* CommandPolicy.CommandPolicyV2;

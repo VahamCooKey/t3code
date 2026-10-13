@@ -1341,24 +1341,29 @@ describe("CodexAdapterV2 fork boundary", () => {
     completedAt: now,
   });
 
-  it.effect("resolves the selected provider turn to an inclusive native fork boundary", () =>
-    Effect.gen(function* () {
-      const now = yield* DateTime.now;
-      const firstTurn = makeProviderTurn("provider-turn-first", 1, "native-turn-first", now);
-      const secondTurn = makeProviderTurn("provider-turn-second", 2, "native-turn-second", now);
+  it.effect.each(["completed", "failed", "interrupted", "cancelled"] as const)(
+    "resolves a %s turn to an inclusive native fork boundary",
+    (status) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const firstTurn = {
+          ...makeProviderTurn("provider-turn-first", 1, "native-turn-first", now),
+          status,
+        };
+        const secondTurn = makeProviderTurn("provider-turn-second", 2, "native-turn-second", now);
 
-      const boundary = yield* CodexAdapterV2.resolveCodexForkBoundary({
-        sourceProviderThread: makeProviderThread(now),
-        sourceProviderTurns: [firstTurn, secondTurn],
-        providerTurnId: firstTurn.id,
-        targetThreadId: ThreadId.make("thread-codex-fork-target"),
-      });
+        const boundary = yield* CodexAdapterV2.resolveCodexForkBoundary({
+          sourceProviderThread: makeProviderThread(now),
+          sourceProviderTurns: [firstTurn, secondTurn],
+          providerTurnId: firstTurn.id,
+          targetThreadId: ThreadId.make("thread-codex-fork-target"),
+        });
 
-      assert.deepEqual(boundary, {
-        lastTurnId: "native-turn-first",
-        rollbackTurnCount: 0,
-      });
-    }),
+        assert.deepEqual(boundary, {
+          lastTurnId: "native-turn-first",
+          rollbackTurnCount: 0,
+        });
+      }),
   );
 
   it.effect("resolves the latest source turn to a native fork boundary without rollback", () =>
@@ -1415,6 +1420,25 @@ describe("CodexAdapterV2 fork boundary", () => {
       });
 
       assert.deepEqual(boundary, { lastTurnId: undefined, rollbackTurnCount: 1 });
+    }),
+  );
+
+  it.effect("rejects an active boundary and a boundary without durable history", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const turn = {
+        ...makeProviderTurn("active-turn", 1, "native-active", now),
+        status: "running" as const,
+      };
+      for (const sourceProviderTurns of [[turn], undefined]) {
+        const error = yield* CodexAdapterV2.resolveCodexForkBoundary({
+          sourceProviderThread: makeProviderThread(now),
+          ...(sourceProviderTurns === undefined ? {} : { sourceProviderTurns }),
+          providerTurnId: turn.id,
+          targetThreadId: ThreadId.make("target"),
+        }).pipe(Effect.flip);
+        assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
+      }
     }),
   );
 

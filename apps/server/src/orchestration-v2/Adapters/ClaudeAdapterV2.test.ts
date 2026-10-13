@@ -1740,186 +1740,212 @@ describe("ClaudeAdapterV2 attachments", () => {
 });
 
 describe("ClaudeAdapterV2 native fork", () => {
-  it.effect("forks at the source assistant cursor and resumes the forked session", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-claude-v2-fork-attachments-",
-        });
-        const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
-        const forkCalls: Array<{
-          readonly sessionId: string;
-          readonly options: unknown;
-          readonly threadId: ThreadId;
-          readonly providerSessionId: ProviderSessionId;
-        }> = [];
-        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
-          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-          settings: DEFAULT_CLAUDE_SETTINGS,
-          environment: {},
-          attachmentsDir,
-          fileSystem,
-          path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
-          idAllocator,
-          queryRunner: {
-            allocateSessionId: Effect.succeed("source-native-session"),
-            open: (input) =>
-              Effect.sync(() => {
-                openedQueries.push(input);
-                return {
-                  messages: Stream.empty,
-                  offer: () => Effect.void,
-                  setModel: () => Effect.void,
-                  setPermissionMode: () => Effect.void,
-                  stopTask: () => Effect.void,
-                  interrupt: Effect.void,
-                  close: Effect.void,
-                };
-              }),
-            forkSession: (input) =>
-              Effect.sync(() => {
-                forkCalls.push(input);
-                return { sessionId: "forked-native-session" };
-              }),
-            subagentLaunchToolUseId: () => Effect.succeed(null),
-            assertComplete: Effect.void,
-          },
-        });
-        const providerSessionId = ProviderSessionId.make("provider-session-claude-fork");
-        const sourceThreadId = ThreadId.make("thread-claude-fork-source");
-        const targetThreadId = ThreadId.make("thread-claude-fork-target");
-        const runtime = yield* adapter.openSession({
-          threadId: sourceThreadId,
-          providerSessionId,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            model: "claude-sonnet-4-6",
-          },
-          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/workspace",
-          }),
-        });
-        const sourceProviderThread = yield* runtime.ensureThread({
-          threadId: sourceThreadId,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            model: "claude-sonnet-4-6",
-          },
-          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/workspace",
-          }),
-        });
-        const now = yield* DateTime.now;
-        const providerTurnId = ProviderTurnId.make("provider-turn-claude-source");
-        const forkedProviderThread = yield* runtime.forkThread({
-          sourceProviderThread,
-          sourceProviderTurns: [
-            {
-              id: providerTurnId,
-              providerThreadId: sourceProviderThread.id,
-              nodeId: NodeId.make("node-claude-source"),
-              runAttemptId: RunAttemptId.make("run-attempt-claude-source"),
-              nativeTurnRef: {
-                driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-                nativeId: "assistant-message-cursor",
-                strength: "weak",
-              },
-              ordinal: 1,
-              status: "completed",
-              startedAt: now,
-              completedAt: now,
+  it.effect.each(["completed", "failed", "interrupted", "cancelled"] as const)(
+    "forks a %s turn at its SDK UUID and resumes the forked session",
+    (status) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const idAllocator = yield* IdAllocator.IdAllocatorV2;
+          const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-claude-v2-fork-attachments-",
+          });
+          const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
+          const forkCalls: Array<{
+            readonly sessionId: string;
+            readonly options: unknown;
+            readonly threadId: ThreadId;
+            readonly providerSessionId: ProviderSessionId;
+          }> = [];
+          const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+            instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+            settings: DEFAULT_CLAUDE_SETTINGS,
+            environment: {},
+            attachmentsDir,
+            fileSystem,
+            path: yield* Path.Path,
+            crypto: yield* Crypto.Crypto,
+            idAllocator,
+            queryRunner: {
+              allocateSessionId: Effect.succeed("source-native-session"),
+              open: (input) =>
+                Effect.sync(() => {
+                  openedQueries.push(input);
+                  return {
+                    messages: Stream.empty,
+                    offer: () => Effect.void,
+                    setModel: () => Effect.void,
+                    setPermissionMode: () => Effect.void,
+                    stopTask: () => Effect.void,
+                    interrupt: Effect.void,
+                    close: Effect.void,
+                  };
+                }),
+              forkSession: (input) =>
+                Effect.sync(() => {
+                  forkCalls.push(input);
+                  return { sessionId: "forked-native-session" };
+                }),
+              subagentLaunchToolUseId: () => Effect.succeed(null),
+              assertComplete: Effect.void,
             },
-          ],
-          providerTurnId,
-          targetThreadId,
-        });
-
-        assert.deepEqual(forkCalls, [
-          {
-            sessionId: "source-native-session",
-            options: {
-              dir: "/workspace",
-              upToMessageId: "assistant-message-cursor",
-            },
-            threadId: targetThreadId,
+          });
+          const providerSessionId = ProviderSessionId.make("provider-session-claude-fork");
+          const sourceThreadId = ThreadId.make("thread-claude-fork-source");
+          const targetThreadId = ThreadId.make("thread-claude-fork-target");
+          const runtime = yield* adapter.openSession({
+            threadId: sourceThreadId,
             providerSessionId,
-          },
-        ]);
-        assert.equal(forkedProviderThread.nativeThreadRef?.nativeId, "forked-native-session");
-        assert.equal(forkedProviderThread.forkedFrom?.providerThreadId, sourceProviderThread.id);
-        assert.equal(forkedProviderThread.forkedFrom?.providerTurnId, providerTurnId);
-
-        yield* runtime.startTurn({
-          appThread: {
-            createdBy: "user",
-            creationSource: "web",
-            id: targetThreadId,
-            projectId: ProjectId.make("project-claude-fork-target"),
-            title: "Claude fork target",
-            providerInstanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
             modelSelection: {
               instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
               model: "claude-sonnet-4-6",
             },
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            activeProviderThreadId: forkedProviderThread.id,
-            lineage: {
-              parentThreadId: sourceThreadId,
-              relationshipToParent: "fork",
-              rootThreadId: sourceThreadId,
+            runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              cwd: "/workspace",
+            }),
+          });
+          const sourceProviderThread = yield* runtime.ensureThread({
+            threadId: sourceThreadId,
+            modelSelection: {
+              instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
+              model: "claude-sonnet-4-6",
             },
-            forkedFrom: null,
-            createdAt: now,
-            updatedAt: now,
-            archivedAt: null,
-            settledOverride: null,
-            settledAt: null,
-            lastVisitedAt: null,
-            deletedAt: null,
-          },
-          threadId: targetThreadId,
-          runId: RunId.make("run-claude-fork-target"),
-          runOrdinal: 1,
-          providerTurnOrdinal: 1,
-          attemptId: RunAttemptId.make("run-attempt-claude-fork-target"),
-          rootNodeId: NodeId.make("node-claude-fork-target-root"),
-          providerThread: forkedProviderThread,
-          message: {
-            createdBy: "user",
-            creationSource: "web",
-            messageId: MessageId.make("message-claude-fork-target"),
-            text: "Respond with fork ok",
-            attachments: [],
-          },
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            model: "claude-sonnet-4-6",
-          },
-          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/workspace",
-          }),
-        });
+            runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              cwd: "/workspace",
+            }),
+          });
+          const now = yield* DateTime.now;
+          const providerTurnId = ProviderTurnId.make("provider-turn-claude-source");
+          const forkInput: ProviderAdapter.ProviderAdapterV2ForkThreadInput = {
+            sourceProviderThread,
+            sourceProviderTurns: [
+              {
+                id: providerTurnId,
+                providerThreadId: sourceProviderThread.id,
+                nodeId: NodeId.make("node-claude-source"),
+                runAttemptId: RunAttemptId.make("run-attempt-claude-source"),
+                nativeTurnRef: {
+                  driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                  nativeId: "550e8400-e29b-41d4-a716-446655440000",
+                  strength: "weak",
+                },
+                ordinal: 1,
+                status,
+                startedAt: now,
+                completedAt: now,
+              },
+            ],
+            providerTurnId,
+            targetThreadId,
+          };
+          const forkedProviderThread = yield* runtime.forkThread(forkInput);
 
-        assert.equal(openedQueries[0]?.options.resume, "forked-native-session");
-        assert.equal(openedQueries[0]?.options.sessionId, undefined);
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          assert.deepEqual(forkCalls, [
+            {
+              sessionId: "source-native-session",
+              options: {
+                dir: "/workspace",
+                upToMessageId: "550e8400-e29b-41d4-a716-446655440000",
+              },
+              threadId: targetThreadId,
+              providerSessionId,
+            },
+          ]);
+          assert.equal(forkedProviderThread.nativeThreadRef?.nativeId, "forked-native-session");
+          assert.equal(forkedProviderThread.forkedFrom?.providerThreadId, sourceProviderThread.id);
+          assert.equal(forkedProviderThread.forkedFrom?.providerTurnId, providerTurnId);
+
+          const { sourceProviderTurns, ...withoutHistory } = forkInput;
+          const boundary = sourceProviderTurns![0]!;
+          const later = { ...boundary, id: ProviderTurnId.make("later-turn"), ordinal: 2 };
+          for (const invalid of [
+            { ...forkInput, sourceProviderTurns: [{ ...boundary, status: "running" as const }] },
+            { ...forkInput, sourceProviderTurns: [{ ...boundary, nativeTurnRef: null }, later] },
+            {
+              ...forkInput,
+              sourceProviderTurns: [
+                {
+                  ...boundary,
+                  nativeTurnRef: { ...boundary.nativeTurnRef!, nativeId: "turn:synthetic" },
+                },
+                later,
+              ],
+            },
+            withoutHistory,
+          ]) {
+            const error = yield* runtime.forkThread(invalid).pipe(Effect.flip);
+            assert.instanceOf(error, ProviderAdapter.ProviderAdapterForkThreadError);
+          }
+          assert.lengthOf(forkCalls, 1);
+
+          yield* runtime.startTurn({
+            appThread: {
+              createdBy: "user",
+              creationSource: "web",
+              id: targetThreadId,
+              projectId: ProjectId.make("project-claude-fork-target"),
+              title: "Claude fork target",
+              providerInstanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
+              modelSelection: {
+                instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
+                model: "claude-sonnet-4-6",
+              },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              activeProviderThreadId: forkedProviderThread.id,
+              lineage: {
+                parentThreadId: sourceThreadId,
+                relationshipToParent: "fork",
+                rootThreadId: sourceThreadId,
+              },
+              forkedFrom: null,
+              createdAt: now,
+              updatedAt: now,
+              archivedAt: null,
+              settledOverride: null,
+              settledAt: null,
+              lastVisitedAt: null,
+              deletedAt: null,
+            },
+            threadId: targetThreadId,
+            runId: RunId.make("run-claude-fork-target"),
+            runOrdinal: 1,
+            providerTurnOrdinal: 1,
+            attemptId: RunAttemptId.make("run-attempt-claude-fork-target"),
+            rootNodeId: NodeId.make("node-claude-fork-target-root"),
+            providerThread: forkedProviderThread,
+            message: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: MessageId.make("message-claude-fork-target"),
+              text: "Respond with fork ok",
+              attachments: [],
+            },
+            modelSelection: {
+              instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
+              model: "claude-sonnet-4-6",
+            },
+            runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              cwd: "/workspace",
+            }),
+          });
+
+          assert.equal(openedQueries[0]?.options.resume, "forked-native-session");
+          assert.equal(openedQueries[0]?.options.sessionId, undefined);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
         ),
       ),
-    ),
   );
 });
 
