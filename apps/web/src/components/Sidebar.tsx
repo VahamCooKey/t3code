@@ -4752,6 +4752,7 @@ export default function Sidebar() {
               await copyProject(
                 project,
                 clicked.value === "duplicate-project" ? "duplicate" : "branch",
+                clicked.value === "branch-project" ? threadRef.threadId : undefined,
               );
             return;
           }

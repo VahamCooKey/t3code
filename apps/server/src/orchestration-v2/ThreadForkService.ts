@@ -1,6 +1,7 @@
 import {
   ContextTransferId,
   OrchestrationV2Actor,
+  type OrchestrationV2Command,
   OrchestrationV2AppThread,
   OrchestrationV2ContextSourcePoint,
   OrchestrationV2ContextTransfer,
@@ -62,6 +63,7 @@ export interface ThreadForkServiceV2Shape {
     readonly transferId: ContextTransferId;
     readonly targetThreadId: ThreadId;
     readonly title?: string;
+    readonly workspace?: Extract<OrchestrationV2Command, { type: "thread.fork" }>["workspace"];
     readonly createdBy: OrchestrationV2Actor;
     readonly creationSource: OrchestrationV2CreationSource;
     readonly createdAt: DateTime.Utc;
@@ -87,6 +89,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
         }
         const targetThread: OrchestrationV2AppThread = {
           ...input.sourceProjection.thread,
+          ...input.workspace,
           createdBy: input.createdBy,
           creationSource: input.creationSource,
           id: input.targetThreadId,

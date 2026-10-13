@@ -2,12 +2,19 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
+  EventId,
   GitCommandError,
   ProjectId,
   ThreadId,
+  RunId,
+  MessageId,
+  ProviderInstanceId,
+  type OrchestrationV2Command,
+  type OrchestrationV2ThreadProjection,
   VcsProcessSpawnError,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -21,6 +28,8 @@ import * as ServerConfig from "../config.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { emptyProjection } from "../orchestration-v2/ProjectionStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -66,6 +75,7 @@ interface HarnessOptions {
   readonly projects?: (
     real: ProjectService.ProjectService["Service"],
   ) => ProjectService.ProjectService["Service"];
+  readonly threads?: Layer.Layer<ThreadManagement.ThreadManagementService>;
 }
 
 /**
@@ -74,6 +84,7 @@ interface HarnessOptions {
  */
 const layer = (baseDir: string, options?: HarnessOptions) =>
   ManagedProjectFolders.layer.pipe(
+    Layer.provide(options?.threads ?? Layer.mock(ThreadManagement.ThreadManagementService)({})),
     Layer.provide(
       options?.projects === undefined
         ? Layer.empty
@@ -504,6 +515,159 @@ it.effect("branches HEAD into an isolated worktree and can duplicate that worktr
       }),
     ),
   ),
+);
+
+it.effect(
+  "branches an active conversation at its last finished turn from the chat's own worktree",
+  () => {
+    let projection: OrchestrationV2ThreadProjection;
+    let fork: Extract<OrchestrationV2Command, { type: "thread.fork" }> | undefined;
+    const threads = Layer.mock(ThreadManagement.ThreadManagementService)({
+      hasReceipt: () => Effect.succeed(false),
+      getThreadRecords: () => Effect.succeed(projection),
+      dispatch: (command) =>
+        Effect.sync(() => {
+          if (command.type === "thread.fork") fork = command;
+          return { sequence: 1, storedEvents: [] };
+        }),
+    });
+    return withScratch(
+      () =>
+        withGitEnv(
+          TEST_IDENTITY,
+          Effect.gen(function* () {
+            const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+            const fs = yield* FileSystem.FileSystem;
+            const path = yield* Path.Path;
+            const source = yield* folders.createNamedProject({ name: "Conversation source" });
+            const chatWorktree = path.join(source.workspaceRoot, "..", "chat-worktree");
+            yield* git(source.workspaceRoot, [
+              "worktree",
+              "add",
+              "-b",
+              "feature/chat",
+              chatWorktree,
+            ]);
+            yield* fs.writeFileString(
+              path.join(chatWorktree, "chat.txt"),
+              "committed only in chat",
+            );
+            yield* git(chatWorktree, ["add", "chat.txt"]);
+            yield* git(chatWorktree, ["commit", "-m", "chat work"]);
+            const now = yield* DateTime.now;
+            const threadId = ThreadId.make("chat");
+            const instanceId = ProviderInstanceId.make("codex");
+            const modelSelection = { instanceId, model: "test-model" };
+            projection = emptyProjection({
+              id: EventId.make("chat-created"),
+              type: "thread.created",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: threadId,
+                projectId: source.projectId,
+                title: "Current chat",
+                createdBy: "user",
+                creationSource: "web",
+                providerInstanceId: instanceId,
+                modelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "feature/chat",
+                worktreePath: chatWorktree,
+                activeProviderThreadId: null,
+                lineage: {
+                  parentThreadId: null,
+                  relationshipToParent: null,
+                  rootThreadId: threadId,
+                },
+                forkedFrom: null,
+                createdAt: now,
+                updatedAt: now,
+                archivedAt: null,
+                settledOverride: null,
+                settledAt: null,
+                snoozedUntil: null,
+                snoozedAt: null,
+                lastVisitedAt: null,
+                deletedAt: null,
+              },
+            });
+            projection = {
+              ...projection,
+              runs: (["completed", "running"] as const).map((status, index) => ({
+                id: RunId.make(`chat-run-${index}`),
+                threadId,
+                ordinal: index + 1,
+                providerInstanceId: instanceId,
+                modelSelection,
+                providerThreadId: null,
+                userMessageId: MessageId.make(`chat-message-${index}`),
+                rootNodeId: null,
+                activeAttemptId: null,
+                status,
+                queuePosition: null,
+                requestedAt: now,
+                startedAt: now,
+                completedAt: status === "completed" ? now : null,
+                checkpointId: null,
+                contextHandoffId: null,
+              })),
+            };
+            const targetThreadId = ThreadId.make("branched-chat");
+            const input = {
+              commandId: CommandId.make("branch-chat"),
+              sourceProjectId: source.projectId,
+              targetProjectId: ProjectId.make("branch-chat"),
+              name: "Chat branch",
+              mode: "branch" as const,
+              conversation: {
+                sourceThreadId: threadId,
+                targetThreadId,
+                creationSource: "web" as const,
+              },
+            };
+            const active = projection;
+            projection = { ...active, runs: [] };
+            const emptyError = yield* Effect.flip(folders.copyProject(input));
+            assert.equal(emptyError._tag, "ProjectCopyError");
+            if (emptyError._tag === "ProjectCopyError")
+              assert.equal(emptyError.reason, "conversation_empty");
+            projection = active;
+            const duplicateError = yield* Effect.flip(
+              folders.copyProject({ ...input, mode: "duplicate" }),
+            );
+            assert.equal(duplicateError._tag, "ProjectCopyError");
+            if (duplicateError._tag === "ProjectCopyError")
+              assert.equal(duplicateError.reason, "conversation_unfinished");
+            const wrongProjectError = yield* Effect.flip(
+              folders.copyProject({ ...input, sourceProjectId: ProjectId.make("other-project") }),
+            );
+            assert.equal(wrongProjectError._tag, "ProjectCopyError");
+            if (wrongProjectError._tag === "ProjectCopyError")
+              assert.equal(wrongProjectError.reason, "conversation_missing");
+            assert.equal(fork === undefined, true);
+            const branch = yield* folders.copyProject(input);
+            assert.equal(branch.threadId, targetThreadId);
+            assert.equal(
+              yield* fs.readFileString(path.join(branch.workspaceRoot, "chat.txt")),
+              "committed only in chat",
+            );
+            assert.deepEqual(fork?.sourcePoint, { type: "run", runId: RunId.make("chat-run-0") });
+            assert.deepEqual(fork?.workspace, {
+              projectId: branch.projectId,
+              branch: branch.branch,
+              worktreePath: null,
+            });
+            assert.equal(
+              yield* gitOutput(chatWorktree, ["branch", "--show-current"]),
+              "feature/chat",
+            );
+          }),
+        ),
+      { threads },
+    );
+  },
 );
 
 it.effect("copies folders without Git and refuses branching them without leaving a folder", () =>

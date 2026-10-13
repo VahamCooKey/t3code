@@ -14,7 +14,11 @@ For separate files, use **Duplicate project** or **Branch project** from the thr
 menu or the project's settings. Duplicate copies the current files into a new
 folder, including uncommitted changes. Dependencies and T3 runtime data are left
 out. Branch creates a new Git branch and worktree at the latest commit; uncommitted
-files stay in the original checkout. Neither copies the project's sessions.
+files stay in the original checkout. **Branch project with this session** in a
+thread's menu also carries that conversation through its latest finished turn
+into the new project. Its history appears immediately, and the agent receives it
+when you continue. Project settings creates the workspace without copying a
+conversation. Duplicate project copies files without copying sessions.
 
 Use a new thread for a separate task. Choose **New worktree** when its code changes
 need a separate branch and working directory.

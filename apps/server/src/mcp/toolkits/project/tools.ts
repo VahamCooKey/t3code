@@ -70,7 +70,7 @@ const ProjectReadTool = Tool.make("t3_project_read", {
 const ProjectCopyTool = Tool.make("t3_project_copy", {
   ...shared,
   description:
-    "Duplicate a project into a new folder, including current uncommitted files, or branch it into an isolated Git worktree at HEAD. Sessions stay in the original. Retain commandId and targetProjectId and reuse them for retries.",
+    "Duplicate a project including current uncommitted files, or branch it into an isolated Git worktree at HEAD. Supply conversation to retain a chat through its latest provider-finished turn in the new project. Retain commandId, targetProjectId and conversation.targetThreadId for retries.",
   parameters: ProjectCopyInput,
   success: ProjectCopyResult,
   dependencies: [...shared.dependencies, ManagedProjectFolders.ManagedProjectFolders],

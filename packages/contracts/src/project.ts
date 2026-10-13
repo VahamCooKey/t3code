@@ -10,6 +10,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  ThreadId,
   TrimmedNonEmptyString,
   TrimmedString,
   type UnknownUnionMember,
@@ -545,6 +546,14 @@ export const ProjectCopyInput = Schema.Struct({
   targetProjectId: ProjectId,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
   mode: Schema.Literals(["duplicate", "branch"]),
+  /** Copy this conversation when the action is invoked from a chat. */
+  conversation: Schema.optional(
+    Schema.Struct({
+      sourceThreadId: ThreadId,
+      targetThreadId: ThreadId,
+      creationSource: Schema.Literals(["web", "mobile", "mcp"]),
+    }),
+  ),
 });
 export type ProjectCopyInput = typeof ProjectCopyInput.Type;
 
@@ -552,6 +561,7 @@ export const ProjectCopyResult = Schema.Struct({
   projectId: ProjectId,
   workspaceRoot: TrimmedNonEmptyString,
   branch: Schema.NullOr(TrimmedNonEmptyString),
+  threadId: Schema.optional(ThreadId),
 });
 export type ProjectCopyResult = typeof ProjectCopyResult.Type;
 

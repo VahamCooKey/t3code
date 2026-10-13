@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   EventId,
+  IsoDateTime,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -25,6 +26,7 @@ import * as ThreadLifecycle from "./ThreadLifecycleService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as Harness from "./testkit/ProviderReplayHarness.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "test-model" };
@@ -73,8 +75,87 @@ const layer = Layer.unwrap(
   }),
 ).pipe(
   Layer.provideMerge(
-    Layer.merge(runtime, CommandReceipts.layer.pipe(Layer.provide(Sqlite.layerMemory))),
+    Layer.mergeAll(
+      runtime,
+      CommandReceipts.layer.pipe(Layer.provide(Sqlite.layerMemory)),
+      ProjectStore.layer.pipe(Layer.provide(Sqlite.layerMemory)),
+    ),
   ),
+);
+
+it.effect(
+  "shows inherited history before sending and retains agent context in a different project",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projects = yield* ProjectStore.ProjectStoreV2;
+      const projectId = ProjectId.make("branched-project");
+      const now = IsoDateTime.make(DateTime.formatIso(yield* DateTime.now));
+      yield* projects.apply({
+        sequence: 0,
+        eventId: EventId.make("branched-project"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "project.created",
+        payload: {
+          projectId,
+          title: "Branch",
+          workspaceRoot: "/new-worktree",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* createSource;
+      yield* addRun(1);
+      yield* addRun(2, "running");
+      yield* orchestrator.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("branch"),
+        sourceThreadId,
+        targetThreadId,
+        sourcePoint: { type: "run", runId: RunId.make("run-1") },
+        workspace: { projectId, branch: "feature/new", worktreePath: null },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const snapshot = yield* orchestrator.getThreadSnapshotWindow(targetThreadId, {
+        rowLimit: 200,
+        userTurnLimit: 10,
+      });
+      const history = snapshot.projection.visibleTurnItems
+        .map((row) => (row.item.type === "user_message" ? row.item.text : ""))
+        .join("\n");
+      assert.include(history, "HISTORY_MARKER_1");
+      assert.notInclude(history, "HISTORY_MARKER_2");
+      assert.equal(snapshot.projection.thread.projectId, projectId);
+      assert.equal(snapshot.projection.thread.branch, "feature/new");
+      assert.isNull(snapshot.projection.thread.worktreePath);
+      assert.equal(snapshot.projection.thread.lineage.parentThreadId, sourceThreadId);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("continue-branch"),
+        threadId: targetThreadId,
+        messageId: MessageId.make("continue-branch"),
+        text: "Continue",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const continued = yield* orchestrator.getThreadProjection(targetThreadId);
+      const handoff = continued.contextHandoffs[0]!;
+      const agentHistory = `${handoff.summaryText}\n${handoff.history?.messages.map((message) => message.text).join("\n") ?? ""}`;
+      assert.include(agentHistory, "HISTORY_MARKER_1");
+      assert.notInclude(agentHistory, "HISTORY_MARKER_2");
+    }).pipe(Effect.provide(layer)),
 );
 
 const createSource = Effect.gen(function* () {

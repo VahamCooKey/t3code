@@ -13,6 +13,7 @@ import {
   CommandId,
   type ProjectCopyInput,
   type ProjectCopyResult,
+  type OrchestrationV2Command,
   type GitManagerServiceError,
   ProjectId,
   type ThreadId,
@@ -38,6 +39,8 @@ import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProjectService from "./ProjectService.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { isForkableSourceRunStatus } from "../orchestration-v2/ThreadForkService.ts";
 
 export class ScratchUnavailableError extends Schema.TaggedError<ScratchUnavailableError>()(
   "ScratchUnavailableError",
@@ -108,6 +111,9 @@ export class ProjectCopyError extends Schema.TaggedError<ProjectCopyError>()("Pr
     "same_project",
     "not_repository",
     "no_commit",
+    "conversation_missing",
+    "conversation_unfinished",
+    "conversation_empty",
   ]),
 }) {
   override get message(): string {
@@ -122,9 +128,17 @@ export class ProjectCopyError extends Schema.TaggedError<ProjectCopyError>()("Pr
         return "Branch project requires a Git repository. Duplicate project can copy this folder.";
       case "no_commit":
         return "Make a first Git commit before branching this project.";
+      case "conversation_missing":
+        return "The source conversation is unavailable in this project.";
+      case "conversation_unfinished":
+        return "Wait for the conversation to finish before duplicating its project.";
+      case "conversation_empty":
+        return "Finish a first response before branching this conversation.";
     }
   }
 }
+
+const isProjectCopyError = Schema.is(ProjectCopyError);
 
 export class ManagedProjectFolders extends Context.Service<
   ManagedProjectFolders,
@@ -274,6 +288,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflow.GitWorkflowService;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const projects = yield* ProjectService.ProjectService;
+  const threads = yield* ThreadManagement.ThreadManagementService;
   const crypto = yield* Crypto.Crypto;
   const copyLocks = yield* KeyedLock.make<ProjectId>();
 
@@ -548,6 +563,77 @@ const make = Effect.gen(function* () {
     };
   });
 
+  const planConversation = (input: ProjectCopyInput) =>
+    Effect.gen(function* () {
+      const conversation = input.conversation;
+      if (conversation === undefined) return undefined;
+      const commandId = CommandId.make(`${input.commandId}:conversation`);
+      if (yield* threads.hasReceipt(commandId)) {
+        const target = yield* threads.getThreadShell(conversation.targetThreadId);
+        if (target?.forkedFrom?.type !== "run")
+          return yield* new ProjectCopyError({
+            projectId: input.sourceProjectId,
+            reason: "conversation_missing",
+          });
+        return {
+          command: {
+            type: "thread.fork",
+            commandId,
+            sourceThreadId: target.forkedFrom.threadId,
+            targetThreadId: conversation.targetThreadId,
+            sourcePoint: { type: "run", runId: target.forkedFrom.runId },
+            title: target.title,
+            createdBy: target.createdBy,
+            creationSource: target.creationSource,
+          } satisfies Extract<OrchestrationV2Command, { type: "thread.fork" }>,
+          cwd: undefined,
+        };
+      }
+      const original = yield* threads.getThreadRecords(conversation.sourceThreadId, ["runs"]);
+      if (original.thread.projectId !== input.sourceProjectId || original.thread.deletedAt !== null)
+        return yield* new ProjectCopyError({
+          projectId: input.sourceProjectId,
+          reason: "conversation_missing",
+        });
+      if (
+        input.mode === "duplicate" &&
+        original.runs.some(
+          (run) => run.status !== "rolled_back" && !isForkableSourceRunStatus(run.status),
+        )
+      )
+        return yield* new ProjectCopyError({
+          projectId: input.sourceProjectId,
+          reason: "conversation_unfinished",
+        });
+      const latest = original.runs
+        .filter((run) => isForkableSourceRunStatus(run.status))
+        .toSorted((a, b) => b.ordinal - a.ordinal)[0];
+      const inherited = original.thread.forkedFrom;
+      const sourcePoint = latest
+        ? { threadId: original.thread.id, runId: latest.id }
+        : inherited?.type === "run"
+          ? inherited
+          : undefined;
+      if (sourcePoint === undefined)
+        return yield* new ProjectCopyError({
+          projectId: input.sourceProjectId,
+          reason: "conversation_empty",
+        });
+      return {
+        command: {
+          type: "thread.fork",
+          commandId,
+          sourceThreadId: sourcePoint.threadId,
+          targetThreadId: conversation.targetThreadId,
+          sourcePoint: { type: "run", runId: sourcePoint.runId },
+          title: `${original.thread.title} ${input.mode === "branch" ? "branch" : "copy"}`,
+          createdBy: conversation.creationSource === "mcp" ? "agent" : "user",
+          creationSource: conversation.creationSource,
+        } satisfies Extract<OrchestrationV2Command, { type: "thread.fork" }>,
+        cwd: original.thread.worktreePath ?? undefined,
+      };
+    });
+
   const copyProject: ManagedProjectFolders["Service"]["copyProject"] = (input) =>
     copyLocks.withLock(
       input.targetProjectId,
@@ -575,6 +661,27 @@ const make = Effect.gen(function* () {
           input.mode === "branch"
             ? `t3/${newProjectFolderName(input.name)}-${input.targetProjectId}`
             : null;
+        // Resolve the conversation before making files. Active chats branch at their
+        // latest provider-finished turn; the in-progress turn stays with the source.
+        const conversation = yield* planConversation(input).pipe(
+          Effect.mapError((cause) =>
+            isProjectCopyError(cause)
+              ? cause
+              : new NamedProjectCreateError({ workspaceRoot: namedProjectsRoot, cause }),
+          ),
+        );
+        const copyConversation = (workspaceRoot: string) =>
+          conversation === undefined
+            ? Effect.void
+            : threads
+                .dispatch({
+                  ...conversation.command,
+                  workspace: { projectId: input.targetProjectId, branch, worktreePath: null },
+                })
+                .pipe(
+                  Effect.asVoid,
+                  Effect.mapError((cause) => new NamedProjectCreateError({ workspaceRoot, cause })),
+                );
         if (Option.isSome(previous)) {
           // Re-submit through the project service to verify this command owns the target.
           yield* projects
@@ -612,10 +719,14 @@ const make = Effect.gen(function* () {
                 ),
               );
           }
+          yield* copyConversation(previous.value.workspaceRoot);
           return {
             projectId: previous.value.id,
             workspaceRoot: previous.value.workspaceRoot,
             branch,
+            ...(input.conversation === undefined
+              ? {}
+              : { threadId: input.conversation.targetThreadId }),
           };
         }
         if (Option.isNone(source))
@@ -623,7 +734,7 @@ const make = Effect.gen(function* () {
             projectId: input.sourceProjectId,
             reason: "source_missing",
           });
-        const cwd = source.value.workspaceRoot;
+        const cwd = conversation?.cwd ?? source.value.workspaceRoot;
         const isRepository = yield* gitWorkflow
           .isRepository(cwd)
           .pipe(Effect.mapError((cause) => new NamedProjectFolderError({ folder: cwd, cause })));
@@ -821,9 +932,17 @@ const make = Effect.gen(function* () {
                 defaultThreadEnvMode: source.value.defaultThreadEnvMode,
                 projectIcon: source.value.projectIcon,
               });
+              yield* copyConversation(workspaceRoot);
             }),
           ).pipe(Effect.mapError((cause) => new NamedProjectCreateError({ workspaceRoot, cause })));
-          return { projectId: input.targetProjectId, workspaceRoot, branch };
+          return {
+            projectId: input.targetProjectId,
+            workspaceRoot,
+            branch,
+            ...(input.conversation === undefined
+              ? {}
+              : { threadId: input.conversation.targetThreadId }),
+          };
         }).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : cleanup)));
       }),
     );

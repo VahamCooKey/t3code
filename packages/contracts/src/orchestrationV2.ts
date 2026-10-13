@@ -3095,6 +3095,13 @@ export const OrchestrationV2Command = Schema.Union([
     targetThreadId: ThreadId,
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
     title: Schema.optional(TrimmedNonEmptyString),
+    workspace: Schema.optional(
+      Schema.Struct({
+        projectId: ProjectId,
+        branch: Schema.NullOr(TrimmedNonEmptyString),
+        worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+      }),
+    ),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
   Schema.Struct({

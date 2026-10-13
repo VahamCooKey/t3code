@@ -222,7 +222,11 @@ export function useThreadActionMenu(input: {
               (p) => p.environmentId === threadRef.environmentId && p.id === thread.projectId,
             );
             if (project)
-              await copyProject(project, action === "duplicate-project" ? "duplicate" : "branch");
+              await copyProject(
+                project,
+                action === "duplicate-project" ? "duplicate" : "branch",
+                action === "branch-project" ? threadRef.threadId : undefined,
+              );
             return;
           }
           case "project-settings": {

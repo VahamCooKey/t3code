@@ -142,7 +142,7 @@ export function buildThreadActionMenuItems(
           },
           {
             id: "branch-project" as const,
-            label: "Branch project",
+            label: "Branch project with this session",
             icon: "git-branch",
             disabled: !state.canCopyProject,
           },
