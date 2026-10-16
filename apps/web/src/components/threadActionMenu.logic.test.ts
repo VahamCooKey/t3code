@@ -40,6 +40,25 @@ function allIds(state: ThreadActionMenuState): string[] {
 }
 
 describe("buildThreadActionMenuItems", () => {
+  it("offers membership on both menu surfaces only with server support and a destination grant", () => {
+    expect(ids(baseState)).not.toContain("session-groups");
+    const supported = { ...baseState, supports: { ...baseState.supports, sessionGroups: true } };
+    expect(
+      buildThreadActionMenuItems(supported).find((item) => item.id === "session-groups")?.disabled,
+    ).toBe(true);
+    expect(
+      buildThreadActionMenuItems({ ...supported, canManageSessionGroups: true }).find(
+        (item) => item.id === "session-groups",
+      )?.disabled,
+    ).toBe(false);
+    expect(
+      buildThreadActionMenuItems({
+        ...supported,
+        canManageSessionGroups: true,
+        canOperate: false,
+      }).find((item) => item.id === "session-groups")?.disabled,
+    ).toBe(true);
+  });
   it.each([false, true])(
     "disables both lifecycle directions without permission (reversed: %s)",
     (reversed) => {

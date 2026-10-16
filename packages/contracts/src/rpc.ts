@@ -368,8 +368,12 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import { SessionGroupsError, SessionGroupsSnapshot, SessionGroupsUpdate } from "./sessionGroups.ts";
 
 export const WS_METHODS = {
+  sessionGroupsGet: "sessionGroups.get",
+  sessionGroupsWatch: "sessionGroups.watch",
+  sessionGroupsUpdate: "sessionGroups.update",
   // Project registry methods
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -1780,6 +1784,25 @@ const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
 });
 
+const WsSessionGroupsGetRpc = Rpc.make(WS_METHODS.sessionGroupsGet, {
+  payload: Schema.Struct({}),
+  success: SessionGroupsSnapshot,
+  error: Schema.Union([SessionGroupsError, EnvironmentAuthorizationError]),
+});
+
+const WsSessionGroupsWatchRpc = Rpc.make(WS_METHODS.sessionGroupsWatch, {
+  payload: Schema.Struct({}),
+  success: SessionGroupsSnapshot,
+  error: Schema.Union([SessionGroupsError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsSessionGroupsUpdateRpc = Rpc.make(WS_METHODS.sessionGroupsUpdate, {
+  payload: SessionGroupsUpdate,
+  success: SessionGroupsSnapshot,
+  error: Schema.Union([SessionGroupsError, EnvironmentAuthorizationError]),
+});
+
 /** Streams the full scheduled-task list: one snapshot on subscribe, then a fresh list after every change. */
 const WsScheduledTasksSubscribeRpc = Rpc.make(WS_METHODS.scheduledTasksSubscribe, {
   payload: ScheduledTaskListInput,
@@ -1876,6 +1899,9 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 ) {}
 
 export const WsRpcGroup = RpcGroup.make(
+  WsSessionGroupsGetRpc,
+  WsSessionGroupsWatchRpc,
+  WsSessionGroupsUpdateRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

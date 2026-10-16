@@ -1,3 +1,7 @@
+import { sessionGroupsEnvironment } from "./useSessionGroups";
+import { openSessionGroupMembership } from "../components/session-groups/SessionGroupMembershipDialog";
+import { environmentServerConfigsAtom } from "../state/server";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import {
@@ -139,6 +143,9 @@ export function useThreadActionMenu(input: {
         if (!thread) return;
         const now = new Date();
         const supports = {
+          sessionGroups:
+            appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
+              ?.environment.capabilities.sessionGroups === true,
           settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
           autoSettleOptOut: readEnvironmentSupportsAutoSettleOptOut(threadRef.environmentId),
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
@@ -149,6 +156,9 @@ export function useThreadActionMenu(input: {
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
         const items = buildThreadActionMenuItems({
           canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
+          canManageSessionGroups: appAtomRegistry.get(
+            sessionGroupsEnvironment.updateSessionGroups.permissionAtom(threadRef.environmentId),
+          ),
           branch: thread.branch ?? null,
           projectFilter: null,
           isPinned: thread.pinnedAt != null,
@@ -196,6 +206,9 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
+          case "session-groups":
+            openSessionGroupMembership(threadRef);
+            return;
           case "project-settings": {
             const project = projects.find(
               (candidate) =>

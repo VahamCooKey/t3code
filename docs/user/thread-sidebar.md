@@ -3,6 +3,22 @@
 Use a new thread for a separate task. Choose **New worktree** when its code changes
 need a separate branch and working directory.
 
+## Group sessions across projects
+
+Create a session group from the group rail beside the thread list. Add sessions
+through **Session groups** in a thread's menu. A group can
+include sessions from different projects, folders, and providers on the same
+environment, and a session can belong to several groups. There is no group limit.
+
+Select a group to filter the list, and choose **All** to clear the filter. The rail
+uses three-letter badges; each badge also exposes the full group name. Manage a
+group to rename it, change its membership, move it up or down, or delete it.
+Deleting a group keeps its sessions and files.
+
+Groups and their order are saved on the environment and shared with its connected
+clients. Each device keeps its own selected filter. Update older environment
+servers if their groups are unavailable.
+
 ## Start a thread
 
 On web and desktop, a new thread keeps the current project and carries your model

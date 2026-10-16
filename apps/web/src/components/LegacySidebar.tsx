@@ -1,4 +1,10 @@
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
+import { useSessionGroups, sessionGroupsEnvironment } from "../hooks/useSessionGroups";
+import { filterSelectedSessionGroupThreads } from "../lib/sessionGroupSelection";
+import { SessionGroupsRail } from "./session-groups/SessionGroupsRail";
+import { openSessionGroupMembership } from "./session-groups/SessionGroupMembershipDialog";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { Spinner } from "~/components/ui/spinner";
 import {
@@ -24,7 +30,16 @@ import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
-import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useCallback,
+  useEffect,
+  memo,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { cn } from "~/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -1164,6 +1179,10 @@ interface SidebarProjectItemProps {
   dragHandleProps: SortableProjectHandleProps | null;
 }
 
+const LegacySessionGroupContext = createContext<
+  Pick<ReturnType<typeof useSessionGroups>, "selection" | "selectedGroup">
+>({ selection: null, selectedGroup: null });
+
 const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjectItemProps) {
   const {
     project,
@@ -1280,7 +1299,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   // thread-list change).
   const sidebarThreadByKeyRef = useRef(sidebarThreadByKey);
   sidebarThreadByKeyRef.current = sidebarThreadByKey;
-  const projectThreads = sidebarThreads;
+  const { selection, selectedGroup } = useContext(LegacySessionGroupContext);
+  const projectThreads = useMemo(
+    () => filterSelectedSessionGroupThreads(sidebarThreads, selection, selectedGroup),
+    [sidebarThreads, selection, selectedGroup],
+  );
   const projectPreferenceKeys = useMemo(() => projectExpansionPreferenceKeys(project), [project]);
   const projectExpanded = useUiStateStore((state) =>
     resolveProjectExpanded(state.projectExpandedById, projectPreferenceKeys),
@@ -2315,6 +2338,20 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
             : []),
           { id: "rename", label: "Rename thread", disabled: !canOperateThread },
+          ...(appAtomRegistry.get(environmentServerConfigsAtom).get(thread.environmentId)
+            ?.environment.capabilities.sessionGroups === true
+            ? [
+                {
+                  id: "session-groups",
+                  label: "Session groups…",
+                  disabled: !appAtomRegistry.get(
+                    sessionGroupsEnvironment.updateSessionGroups.permissionAtom(
+                      thread.environmentId,
+                    ),
+                  ),
+                },
+              ]
+            : []),
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
@@ -2363,6 +2400,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return;
       }
 
+      if (clicked === "session-groups") {
+        if (
+          appAtomRegistry.get(
+            sessionGroupsEnvironment.updateSessionGroups.permissionAtom(thread.environmentId),
+          )
+        )
+          openSessionGroupMembership(threadRef);
+        return;
+      }
       if (clicked === "rename") {
         startThreadRename(threadKey, thread.title);
         return;
@@ -3213,7 +3259,21 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 
 export default function LegacySidebar() {
   const projects = useProjects();
-  const sidebarThreads = useThreadShells();
+  const allSidebarThreads = useThreadShells();
+  const sessionGroups = useSessionGroups(allSidebarThreads);
+  const groupContext = useMemo(
+    () => ({ selection: sessionGroups.selection, selectedGroup: sessionGroups.selectedGroup }),
+    [sessionGroups.selection, sessionGroups.selectedGroup],
+  );
+  const sidebarThreads = useMemo(
+    () =>
+      filterSelectedSessionGroupThreads(
+        allSidebarThreads,
+        sessionGroups.selection,
+        sessionGroups.selectedGroup,
+      ),
+    [allSidebarThreads, sessionGroups.selection, sessionGroups.selectedGroup],
+  );
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
@@ -3520,7 +3580,13 @@ export default function LegacySidebar() {
       sidebarProjectSortOrder,
     ).flatMap((project) => {
       const resolvedProject = sidebarProjectByKey.get(project.id);
-      return resolvedProject ? [resolvedProject] : [];
+      return resolvedProject &&
+        (sessionGroups.selection === null ||
+          (threadsByProjectKey.get(resolvedProject.projectKey) ?? []).some(
+            (thread) => thread.archivedAt === null,
+          ))
+        ? [resolvedProject]
+        : [];
     });
   }, [
     sidebarProjectSortOrder,
@@ -3529,6 +3595,8 @@ export default function LegacySidebar() {
     sidebarProjectByKey,
     sidebarProjects,
     visibleThreads,
+    sessionGroups.selection,
+    threadsByProjectKey,
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
   const visibleSidebarThreadKeys = useMemo(
@@ -3854,47 +3922,60 @@ export default function LegacySidebar() {
         <SidebarThreadDetailPrewarmer key={scopedThreadKey(threadRef)} threadRef={threadRef} />
       ))}
       <SidebarChromeHeader isElectron={isElectron} />
-
-      <SidebarProjectsContent
-        showArm64IntelBuildWarning={showArm64IntelBuildWarning}
-        arm64IntelBuildWarningDescription={arm64IntelBuildWarningDescription}
-        desktopUpdateButtonAction={desktopUpdateButtonAction}
-        desktopUpdateButtonDisabled={desktopUpdateButtonDisabled}
-        desktopUpdateActionPending={desktopUpdateActionPending}
-        handleDesktopUpdateButtonClick={handleDesktopUpdateButtonClick}
-        projectSortOrder={sidebarProjectSortOrder}
-        threadSortOrder={sidebarThreadSortOrder}
-        threadPreviewCount={sidebarThreadPreviewCount}
-        updateSettings={updateSettings}
-        openAddProject={openAddProjectCommandPalette}
-        isManualProjectSorting={isManualProjectSorting}
-        projectDnDSensors={projectDnDSensors}
-        projectCollisionDetection={projectCollisionDetection}
-        handleProjectDragStart={handleProjectDragStart}
-        handleProjectDragEnd={handleProjectDragEnd}
-        handleProjectDragCancel={handleProjectDragCancel}
-        handleNewThread={handleNewThread}
-        archiveThread={archiveThread}
-        deleteThread={deleteThread}
-        markThreadUnread={markThreadUnread}
-        sortedProjects={sortedProjects}
-        expandedThreadListsByProject={expandedThreadListsByProject}
-        activeRouteProjectKey={activeRouteProjectKey}
-        routeThreadKey={routeThreadKey}
-        openPullRequestsInRightPanel={routeThreadRef !== null}
-        newThreadShortcutLabel={newThreadShortcutLabel}
-        commandPaletteShortcutLabel={commandPaletteShortcutLabel}
-        threadJumpLabelByKey={visibleThreadJumpLabelByKey}
-        attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-        expandThreadListForProject={expandThreadListForProject}
-        collapseThreadListForProject={collapseThreadListForProject}
-        dragInProgressRef={dragInProgressRef}
-        suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-        suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
-        attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
-        projectsLength={projects.length}
-      />
-      <SidebarChromeFooter />
+      <LegacySessionGroupContext value={groupContext}>
+        <div className="flex min-h-0 flex-1">
+          <SessionGroupsRail state={sessionGroups} />
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {sessionGroups.selection !== null && visibleThreads.length === 0 && (
+              <p role="status" className="px-3 py-4 text-sm text-muted-foreground">
+                {sessionGroups.selectedGroup
+                  ? `No threads in ${sessionGroups.selectedGroup.name}`
+                  : "Connect to this group's environment to view its sessions."}
+              </p>
+            )}
+            <SidebarProjectsContent
+              showArm64IntelBuildWarning={showArm64IntelBuildWarning}
+              arm64IntelBuildWarningDescription={arm64IntelBuildWarningDescription}
+              desktopUpdateButtonAction={desktopUpdateButtonAction}
+              desktopUpdateButtonDisabled={desktopUpdateButtonDisabled}
+              desktopUpdateActionPending={desktopUpdateActionPending}
+              handleDesktopUpdateButtonClick={handleDesktopUpdateButtonClick}
+              projectSortOrder={sidebarProjectSortOrder}
+              threadSortOrder={sidebarThreadSortOrder}
+              threadPreviewCount={sidebarThreadPreviewCount}
+              updateSettings={updateSettings}
+              openAddProject={openAddProjectCommandPalette}
+              isManualProjectSorting={isManualProjectSorting}
+              projectDnDSensors={projectDnDSensors}
+              projectCollisionDetection={projectCollisionDetection}
+              handleProjectDragStart={handleProjectDragStart}
+              handleProjectDragEnd={handleProjectDragEnd}
+              handleProjectDragCancel={handleProjectDragCancel}
+              handleNewThread={handleNewThread}
+              archiveThread={archiveThread}
+              deleteThread={deleteThread}
+              markThreadUnread={markThreadUnread}
+              sortedProjects={sortedProjects}
+              expandedThreadListsByProject={expandedThreadListsByProject}
+              activeRouteProjectKey={activeRouteProjectKey}
+              routeThreadKey={routeThreadKey}
+              openPullRequestsInRightPanel={routeThreadRef !== null}
+              newThreadShortcutLabel={newThreadShortcutLabel}
+              commandPaletteShortcutLabel={commandPaletteShortcutLabel}
+              threadJumpLabelByKey={visibleThreadJumpLabelByKey}
+              attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+              expandThreadListForProject={expandThreadListForProject}
+              collapseThreadListForProject={collapseThreadListForProject}
+              dragInProgressRef={dragInProgressRef}
+              suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+              suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
+              attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
+              projectsLength={projects.length}
+            />
+            <SidebarChromeFooter />
+          </div>
+        </div>
+      </LegacySessionGroupContext>
     </>
   );
 }

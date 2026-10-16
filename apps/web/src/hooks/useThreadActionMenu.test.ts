@@ -34,6 +34,18 @@ function recordEffect(action: string) {
   state.completed.resolve();
 }
 
+vi.mock("./useSessionGroups", () => ({
+  sessionGroupsEnvironment: {
+    updateSessionGroups: { permissionAtom: () => "groups-permission" },
+  },
+}));
+vi.mock("../components/session-groups/SessionGroupMembershipDialog", () => ({
+  openSessionGroupMembership: vi.fn(),
+}));
+vi.mock("../state/server", () => ({ environmentServerConfigsAtom: "configs" }));
+vi.mock("../rpc/atomRegistry", () => ({
+  appAtomRegistry: { get: (atom: string) => (atom === "configs" ? new Map() : false) },
+}));
 vi.mock("../components/CustomSnoozeDialog", () => ({ requestCustomSnooze: vi.fn() }));
 vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
