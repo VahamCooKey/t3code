@@ -100,9 +100,7 @@ describe("deriveSessionGroupCounts", () => {
   });
 
   it("treats preparing, queued, starting, and running as active", () => {
-    const groups = [
-      makeGroup("g1", "Busy", ["t1", "t2", "t3", "t4", "t5"]),
-    ];
+    const groups = [makeGroup("g1", "Busy", ["t1", "t2", "t3", "t4", "t5"])];
     const threads = [
       makeThread("t1", "preparing"),
       makeThread("t2", "queued"),
@@ -118,10 +116,7 @@ describe("deriveSessionGroupCounts", () => {
   });
 
   it("counts a thread in each of its groups and ignores threads outside groups", () => {
-    const groups = [
-      makeGroup("g1", "A", ["shared", "only-a"]),
-      makeGroup("g2", "B", ["shared"]),
-    ];
+    const groups = [makeGroup("g1", "A", ["shared", "only-a"]), makeGroup("g2", "B", ["shared"])];
     const threads = [
       makeThread("shared", "running"),
       makeThread("only-a", "waiting"),

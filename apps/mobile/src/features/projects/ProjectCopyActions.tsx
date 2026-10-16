@@ -4,7 +4,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { useState } from "react";
 import { Alert, Pressable, View } from "react-native";
 import { uuidv4 } from "../../lib/uuid";
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 import { projectEnvironment } from "../../state/projects";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";

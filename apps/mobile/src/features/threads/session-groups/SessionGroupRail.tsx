@@ -2,8 +2,8 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { memo, useMemo } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { AppText } from "../../../components/AppText";
-import { SymbolView } from "../../../components/AppSymbol";
+import { AppText } from "../../../components/ui/AppText";
+import { SymbolView } from "../../../components/ui/AppSymbol";
 import { cn } from "../../../lib/cn";
 import { useEnvironmentScope } from "../../../state/session";
 import {

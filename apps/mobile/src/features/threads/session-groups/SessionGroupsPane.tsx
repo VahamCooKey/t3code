@@ -1,7 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useState, type ReactNode } from "react";
 import { View } from "react-native";
-import { AppText } from "../../../components/AppText";
+import { AppText } from "../../../components/ui/AppText";
 import { SessionGroupManager } from "./SessionGroupManager";
 import { SessionGroupRail } from "./SessionGroupRail";
 import type { SessionGroupSelection } from "./selection";

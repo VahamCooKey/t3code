@@ -11,9 +11,9 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { AppText } from "../../../components/AppText";
-import { SymbolView } from "../../../components/AppSymbol";
-import { ControlPill } from "../../../components/ControlPill";
+import { AppText } from "../../../components/ui/AppText";
+import { SymbolView } from "../../../components/ui/AppSymbol";
+import { ControlPill } from "../../../components/ui/ControlPill";
 import { useEnvironmentScope } from "../../../state/session";
 import { reorderedSessionGroupIds } from "./selection";
 import type { MobileSessionGroupEnvironment } from "./types";
