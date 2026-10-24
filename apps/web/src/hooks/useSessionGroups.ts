@@ -12,7 +12,7 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentSummaries } from "../state/presentation";
 import { environmentSession } from "../state/session";
@@ -70,31 +70,26 @@ export function useSessionGroups(threads: readonly EnvironmentThreadShell[]) {
   useEffect(() => {
     if (sessionGroupSelectionWasDeleted(selection, state.snapshots)) setSelection(null);
   }, [selection, setSelection, state.snapshots]);
-  const entries = useMemo(
-    () =>
-      state.environments.flatMap((environment) => {
-        const shells = threads.filter(
-          (thread) =>
-            thread.environmentId === environment.environmentId && thread.archivedAt === null,
-        );
-        const counts = deriveSessionGroupCounts(
-          environment.groups,
-          shells.map((thread) => ({
-            id: thread.id,
-            status:
-              thread.hasPendingApprovals || thread.hasPendingUserInput
-                ? "waiting"
-                : (thread.runtime?.status ?? "stopped"),
-          })),
-        );
-        return environment.groups.map((group) => ({
-          ...environment,
-          group,
-          counts: counts.get(group.id)!,
-        }));
-      }),
-    [state.environments, threads],
-  );
+  const entries = state.environments.flatMap((environment) => {
+    const shells = threads.filter(
+      (thread) => thread.environmentId === environment.environmentId && thread.archivedAt === null,
+    );
+    const counts = deriveSessionGroupCounts(
+      environment.groups,
+      shells.map((thread) => ({
+        id: thread.id,
+        status:
+          thread.hasPendingApprovals || thread.hasPendingUserInput
+            ? "waiting"
+            : (thread.runtime?.status ?? "stopped"),
+      })),
+    );
+    return environment.groups.map((group) => ({
+      ...environment,
+      group,
+      counts: counts.get(group.id)!,
+    }));
+  });
   const selectedGroup =
     selection === null
       ? null
@@ -105,9 +100,6 @@ export function useSessionGroups(threads: readonly EnvironmentThreadShell[]) {
   const runUpdate = useAtomCommand(sessionGroupsEnvironment.updateSessionGroups, {
     reportFailure: false,
   });
-  const update = useCallback(
-    (...args: Parameters<typeof runUpdate>) => runUpdate(...args),
-    [runUpdate],
-  );
+  const update = runUpdate;
   return { ...state, entries, selection, selectedGroup, setSelection, update };
 }

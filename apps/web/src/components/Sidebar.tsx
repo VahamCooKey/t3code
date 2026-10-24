@@ -925,7 +925,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     clearSelection();
     setPersistedProjectScopeKey(key);
   };
-  useEffect(() => clearSelection(), [clearSelection, sessionGroups.selection]);
+  const previousGroupSelection = useRef(sessionGroups.selection);
+  useEffect(() => {
+    if (previousGroupSelection.current !== sessionGroups.selection) {
+      previousGroupSelection.current = sessionGroups.selection;
+      clearSelection();
+    }
+  }, [clearSelection, sessionGroups.selection]);
   const projectScopeKey =
     sessionGroups.selection === null
       ? resolveSidebarProjectScopeKey({

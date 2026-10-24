@@ -27,7 +27,9 @@ const baseState: ThreadActionMenuState = {
 
 describe("buildThreadActionMenuItems", () => {
   it("offers membership on both menu surfaces only with server support and a destination grant", () => {
-    expect(ids(baseState)).not.toContain("session-groups");
+    expect(buildThreadActionMenuItems(baseState).map((item) => item.id)).not.toContain(
+      "session-groups",
+    );
     const supported = { ...baseState, supports: { ...baseState.supports, sessionGroups: true } };
     expect(
       buildThreadActionMenuItems(supported).find((item) => item.id === "session-groups")?.disabled,
