@@ -80,8 +80,7 @@ describe("mobile group list composition", () => {
       threads: filtered,
       environmentId: scope.environmentId,
       projectRefs: null,
-      searchQuery: "needle",
-      matchedThreadKeys: new Set([`${local}:${outside.id}`]),
+      searchQuery: "",
       now,
       settledLimit: 1,
       settledShelfExpanded: true,
@@ -91,12 +90,19 @@ describe("mobile group list composition", () => {
     expect(layout.settledCount).toBe(2);
     expect(layout.hiddenSettledCount).toBe(1);
     expect(layout.snoozedCount).toBe(1);
-    expect(layout.items.map((item) => item.thread.id)).toContain(activeB.id);
-    expect(
-      layout.items.some(
-        (item) => item.thread.id === outside.id || item.thread.environmentId === remote,
-      ),
-    ).toBe(false);
+    // Search ranks matches in one list, still only from the group's members.
+    const searched = buildThreadListV2Items({
+      threads: filtered,
+      environmentId: scope.environmentId,
+      projectRefs: null,
+      searchQuery: "needle",
+      matchedThreadKeys: new Set([`${local}:${outside.id}`]),
+      now,
+    });
+    expect(new Set(searched.items.map((item) => item.thread.id))).toEqual(
+      new Set([activeA.id, activeB.id, settledA.id, settledB.id, snoozed.id]),
+    );
+    expect(searched.items.some((item) => item.thread.environmentId === remote)).toBe(false);
     const rows = buildThreadListV2ListItems({
       items: layout.items,
       pendingTasks: [],
