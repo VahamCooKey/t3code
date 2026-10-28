@@ -10,6 +10,7 @@ import {
   sessionGroupContainsThread,
   sessionGroupHue,
   sessionGroupThreadIsUnseen,
+  sessionGroupUsualProjectId,
 } from "./sessionGroupLogic.ts";
 
 const asThreadId = (id: string) => id as ThreadId;
@@ -233,5 +234,41 @@ describe("sessionGroupThreadIsUnseen", () => {
     expect(
       sessionGroupThreadIsUnseen({ latestRun: run("completed", "2026-10-01T00:00:00Z") }),
     ).toBe(false);
+  });
+});
+
+describe("sessionGroupUsualProjectId", () => {
+  const shell = (
+    id: string,
+    projectId: string,
+    updatedAt: string,
+    archivedAt: string | null = null,
+  ) => ({
+    id: id as ThreadId,
+    projectId,
+    updatedAt,
+    archivedAt,
+  });
+  it("picks the project most member chats live in", () => {
+    const group = makeGroup("g", "FNF", ["a", "b", "c"]);
+    expect(
+      sessionGroupUsualProjectId(group, [
+        shell("a", "web", "2026-10-01"),
+        shell("b", "web", "2026-10-02"),
+        shell("c", "api", "2026-10-09"),
+        shell("outside", "api", "2026-10-10"),
+      ]),
+    ).toBe("web");
+  });
+  it("breaks ties by the most recently updated chat and ignores archived ones", () => {
+    const group = makeGroup("g", "FNF", ["a", "b", "c"]);
+    expect(
+      sessionGroupUsualProjectId(group, [
+        shell("a", "web", "2026-10-01"),
+        shell("b", "api", "2026-10-05"),
+        shell("c", "web", "2026-10-09", "2026-10-10"),
+      ]),
+    ).toBe("api");
+    expect(sessionGroupUsualProjectId(makeGroup("g", "Empty", []), [])).toBeNull();
   });
 });

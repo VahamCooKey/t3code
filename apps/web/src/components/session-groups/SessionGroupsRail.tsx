@@ -1,7 +1,9 @@
-import { useId, useState, type CSSProperties, type MouseEvent } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import type {
   EnvironmentId,
+  ScopedProjectRef,
   ScopedThreadRef,
+  ThreadId,
   SessionGroup,
   SessionGroupsUpdate,
 } from "@t3tools/contracts";
@@ -9,10 +11,19 @@ import {
   sessionGroupBadgeLabel,
   sessionGroupContainsThread,
   sessionGroupHue,
+  sessionGroupUsualProjectId,
   type SessionGroupCountSummary,
 } from "@t3tools/client-runtime/state/sessionGroupLogic";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { ArrowDownIcon, ArrowUpIcon, LayersIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
+import {
+  resolveSessionGroupPendingJoins,
+  useSessionGroupPendingJoins,
+} from "../../lib/sessionGroupPendingJoins";
+import { threadContextDropTargetProps, useThreadContextDrop } from "../chat/threadContextDrag";
 import type { useSessionGroups } from "../../hooks/useSessionGroups";
 import type { SessionGroupSelection } from "../../lib/sessionGroupSelection";
 import { readLocalApi } from "../../localApi";
@@ -49,6 +60,89 @@ export function sessionGroupTint(id: string, selected: boolean): CSSProperties {
   };
 }
 
+export type StartChatInProject = (
+  projectRef: ScopedProjectRef,
+) => Promise<{ readonly draftId: DraftId; readonly threadId: ThreadId } | null>;
+
+/** The project a new chat in this group starts in: where most of its chats
+    live, else the caller's default when it is on the same environment. */
+export function sessionGroupChatProject(input: {
+  readonly environmentId: EnvironmentId;
+  readonly group: SessionGroup;
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly fallbackProjectRef: ScopedProjectRef | null;
+}): ScopedProjectRef | null {
+  const usual = sessionGroupUsualProjectId(
+    input.group,
+    input.threads.filter((thread) => thread.environmentId === input.environmentId),
+  );
+  if (usual !== null) return scopeProjectRef(input.environmentId, usual);
+  return input.fallbackProjectRef?.environmentId === input.environmentId
+    ? input.fallbackProjectRef
+    : null;
+}
+
+/** Opens a new chat draft in the group's project; it joins the group once sent. */
+export async function startSessionGroupChat(input: {
+  readonly environmentId: EnvironmentId;
+  readonly group: SessionGroup;
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly fallbackProjectRef: ScopedProjectRef | null;
+  readonly startChat: StartChatInProject;
+}): Promise<boolean> {
+  const projectRef = sessionGroupChatProject(input);
+  if (projectRef === null) return false;
+  const draft = await input.startChat(projectRef);
+  if (draft === null) return false;
+  useSessionGroupPendingJoins.getState().add({
+    draftId: draft.draftId,
+    environmentId: input.environmentId,
+    threadId: draft.threadId,
+    groupId: input.group.id,
+    createdAt: new Date().toISOString(),
+  });
+  return true;
+}
+
+/** Adds chats started from a group once their first message creates them. */
+function usePendingGroupJoins(
+  update: GroupsState["update"],
+  threads: readonly EnvironmentThreadShell[],
+) {
+  const joins = useSessionGroupPendingJoins((store) => store.joins);
+  const drafts = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
+  const inFlight = useRef(new Set<DraftId>());
+  // oxlint-disable-next-line t3code/react-effect-budget -- the chat appears through the shell subscription after its first send, so no click handler can make the join.
+  useEffect(() => {
+    if (joins.length === 0) return;
+    const store = useSessionGroupPendingJoins.getState();
+    const { ready, retargets, expired } = resolveSessionGroupPendingJoins({
+      joins,
+      draftThreadIds: new Map(
+        Object.entries(drafts).map(([draftId, draft]) => [
+          draftId as DraftId,
+          draft.promotedTo?.threadId ?? draft.threadId,
+        ]),
+      ),
+      liveThreadKeys: new Set(threads.map((thread) => `${thread.environmentId}:${thread.id}`)),
+      nowMs: Date.now(),
+    });
+    for (const draftId of expired) store.remove(draftId);
+    for (const { draftId, threadId } of retargets) store.retarget(draftId, threadId);
+    for (const join of ready) {
+      if (inFlight.current.has(join.draftId)) continue;
+      inFlight.current.add(join.draftId);
+      void update({
+        environmentId: join.environmentId,
+        input: { type: "membership", id: join.groupId, threadId: join.threadId, member: true },
+      }).finally(() => {
+        inFlight.current.delete(join.draftId);
+        useSessionGroupPendingJoins.getState().remove(join.draftId);
+      });
+    }
+  }, [joins, drafts, threads, update]);
+}
+
 function describeCounts(counts: SessionGroupCountSummary): string {
   const parts = [`${counts.live} ${counts.live === 1 ? "chat" : "chats"}`];
   if (counts.active > 0) parts.push(`${counts.active} working`);
@@ -61,12 +155,22 @@ export function SessionGroupsRail({
   state,
   onSelect = state.setSelection,
   activeThreadRef = null,
+  threads,
+  startChat,
+  fallbackProjectRef = null,
 }: {
   readonly state: GroupsState;
   readonly onSelect?: (selection: SessionGroupSelection | null) => void;
   /** The open chat, offered as "Add open chat" in a group's menu. */
   readonly activeThreadRef?: ScopedThreadRef | null;
+  /** All listed chats, for drops, counts and a group's usual project. */
+  readonly threads: readonly EnvironmentThreadShell[];
+  /** Opens a new chat draft in a project; enables "New chat in group". */
+  readonly startChat?: StartChatInProject;
+  /** Where a new chat in an empty group starts. */
+  readonly fallbackProjectRef?: ScopedProjectRef | null;
 }) {
+  usePendingGroupJoins(state.update, threads);
   const [dialog, setDialog] = useState<RailDialog | null>(null);
   const [menuError, setMenuError] = useState<string | null>(null);
   const { environments } = useEnvironments();
@@ -93,8 +197,23 @@ export function SessionGroupsRail({
     const isMember =
       openChatHere && sessionGroupContainsThread(target.group, activeThreadRef.threadId);
     const position = { x: event.clientX, y: event.clientY };
+    const chatProject = sessionGroupChatProject({
+      environmentId: target.environmentId,
+      group: target.group,
+      threads,
+      fallbackProjectRef,
+    });
     const clicked = await api.contextMenu.show(
       [
+        ...(startChat
+          ? [
+              {
+                id: "new-chat" as const,
+                label: "New chat in group",
+                disabled: !operable || chatProject === null,
+              },
+            ]
+          : []),
         ...(openChatHere
           ? [
               {
@@ -108,7 +227,7 @@ export function SessionGroupsRail({
           id: "rename" as const,
           label: "Rename…",
           disabled: !operable,
-          separatorBefore: openChatHere,
+          separatorBefore: openChatHere || startChat !== undefined,
         },
         { id: "move-up" as const, label: "Move up", disabled: !operable || index === 0 },
         {
@@ -136,6 +255,16 @@ export function SessionGroupsRail({
       }
     };
     switch (clicked) {
+      case "new-chat":
+        if (startChat)
+          await startSessionGroupChat({
+            environmentId: target.environmentId,
+            group: target.group,
+            threads,
+            fallbackProjectRef,
+            startChat,
+          });
+        return;
       case "toggle-open-chat":
         if (activeThreadRef !== null)
           await update({
@@ -163,6 +292,29 @@ export function SessionGroupsRail({
         setDialog({ kind: "delete", target });
         return;
     }
+  };
+
+  const addDroppedChats = async (target: GroupTarget, refs: ReadonlyArray<ScopedThreadRef>) => {
+    setMenuError(null);
+    if (!canOperate(target.environmentId)) {
+      setMenuError("This connection cannot change groups.");
+      return;
+    }
+    const sameEnvironment = refs.filter((ref) => ref.environmentId === target.environmentId);
+    for (const ref of sameEnvironment) {
+      if (sessionGroupContainsThread(target.group, ref.threadId)) continue;
+      const result = await state.update({
+        environmentId: target.environmentId,
+        input: { type: "membership", id: target.group.id, threadId: ref.threadId, member: true },
+      });
+      if (result._tag === "Failure") {
+        const cause = squashAtomCommandFailure(result);
+        setMenuError(cause instanceof Error ? cause.message : "Could not add the chat.");
+        return;
+      }
+    }
+    if (sameEnvironment.length < refs.length)
+      setMenuError("Chats from another environment cannot join this group.");
   };
 
   const attention = state.entries.reduce((sum, entry) => sum + entry.counts.waiting, 0);
@@ -223,67 +375,24 @@ export function SessionGroupsRail({
                   const selected =
                     state.selection?.environmentId === environment.environmentId &&
                     state.selection.id === group.id;
+                  const target = { environmentId: environment.environmentId, group };
                   return (
-                    <Tooltip key={group.id}>
-                      <TooltipTrigger
-                        render={
-                          <button
-                            type="button"
-                            aria-pressed={selected}
-                            aria-label={`${group.name}, ${describeCounts(counts)}`}
-                            style={sessionGroupTint(group.id, selected)}
-                            className="relative flex size-11 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground transition-colors focus-visible:outline-2 focus-visible:outline-ring"
-                            onClick={() =>
-                              onSelect(
-                                selected
-                                  ? null
-                                  : { environmentId: environment.environmentId, id: group.id },
-                              )
-                            }
-                            onContextMenu={(event) =>
-                              void openGroupMenu(
-                                event,
-                                { environmentId: environment.environmentId, group },
-                                index,
-                              )
-                            }
-                          />
-                        }
-                      >
-                        <span
-                          className={cn(
-                            "max-w-full truncate px-0.5 text-xs tracking-tight",
-                            selected ? "font-bold" : "font-semibold",
-                          )}
-                        >
-                          {sessionGroupBadgeLabel(group.name)}
-                        </span>
-                        {counts.waiting > 0 ? (
-                          <AttentionBadge count={counts.waiting} />
-                        ) : counts.unseen > 0 ? (
-                          <span
-                            aria-hidden
-                            className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-sidebar bg-info"
-                          />
-                        ) : null}
-                        {counts.active > 0 ? (
-                          <span
-                            aria-hidden
-                            className="absolute right-1 bottom-1 size-1.5 rounded-full bg-success"
-                          />
-                        ) : null}
-                      </TooltipTrigger>
-                      <TooltipPopup side="right">
-                        <span className="font-medium">{group.name}</span>
-                        {showEnvironment ? ` · ${label(environment.environmentId)}` : null}
-                        <br />
-                        {describeCounts(counts)}
-                        <br />
-                        <span className="text-muted-foreground">
-                          {selected ? "Click to show all · " : ""}Right-click for options
-                        </span>
-                      </TooltipPopup>
-                    </Tooltip>
+                    <GroupTile
+                      key={group.id}
+                      target={target}
+                      counts={counts}
+                      selected={selected}
+                      environmentLabel={showEnvironment ? label(environment.environmentId) : null}
+                      onSelect={() =>
+                        onSelect(
+                          selected
+                            ? null
+                            : { environmentId: environment.environmentId, id: group.id },
+                        )
+                      }
+                      onContextMenu={(event) => void openGroupMenu(event, target, index)}
+                      onDropChats={(refs) => void addDroppedChats(target, refs)}
+                    />
                   );
                 })}
               </div>
@@ -340,6 +449,82 @@ export function SessionGroupsRail({
         <DeleteGroupDialog state={state} target={dialog.target} close={() => setDialog(null)} />
       ) : null}
     </>
+  );
+}
+
+function GroupTile({
+  target,
+  counts,
+  selected,
+  environmentLabel,
+  onSelect,
+  onContextMenu,
+  onDropChats,
+}: {
+  readonly target: GroupTarget;
+  readonly counts: SessionGroupCountSummary;
+  readonly selected: boolean;
+  readonly environmentLabel: string | null;
+  readonly onSelect: () => void;
+  readonly onContextMenu: (event: MouseEvent) => void;
+  readonly onDropChats: (refs: ReadonlyArray<ScopedThreadRef>) => void;
+}) {
+  const { group } = target;
+  const tileRef = useRef<HTMLButtonElement>(null);
+  useThreadContextDrop(tileRef, target.environmentId, group.id, (refs, isActive) => {
+    if (isActive()) onDropChats(refs);
+  });
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            ref={tileRef}
+            type="button"
+            aria-pressed={selected}
+            aria-label={`${group.name}, ${describeCounts(counts)}`}
+            style={sessionGroupTint(group.id, selected)}
+            className="relative flex size-11 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground transition-colors focus-visible:outline-2 focus-visible:outline-ring data-[thread-context-over]:outline-2 data-[thread-context-over]:-outline-offset-2 data-[thread-context-over]:outline-ring"
+            onClick={onSelect}
+            onContextMenu={onContextMenu}
+            {...threadContextDropTargetProps()}
+          />
+        }
+      >
+        <span
+          className={cn(
+            "max-w-full truncate px-0.5 text-xs tracking-tight",
+            selected ? "font-bold" : "font-semibold",
+          )}
+        >
+          {sessionGroupBadgeLabel(group.name)}
+        </span>
+        {counts.waiting > 0 ? (
+          <AttentionBadge count={counts.waiting} />
+        ) : counts.unseen > 0 ? (
+          <span
+            aria-hidden
+            className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full border-2 border-sidebar bg-info"
+          />
+        ) : null}
+        {counts.active > 0 ? (
+          <span
+            aria-hidden
+            className="absolute right-1 bottom-1 size-1.5 rounded-full bg-success"
+          />
+        ) : null}
+      </TooltipTrigger>
+      <TooltipPopup side="right">
+        <span className="font-medium">{group.name}</span>
+        {environmentLabel ? ` · ${environmentLabel}` : null}
+        <br />
+        {describeCounts(counts)}
+        <br />
+        <span className="text-muted-foreground">
+          {selected ? "Click to show all · " : ""}Drag chats here · right-click for options
+        </span>
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useSessionGroups, sessionGroupsEnvironment } from "../hooks/useSessionGroups";
-import { SessionGroupsRail } from "./session-groups/SessionGroupsRail";
+import { SessionGroupsRail, startSessionGroupChat } from "./session-groups/SessionGroupsRail";
 import { openSessionGroupMembership } from "./session-groups/SessionGroupMembershipDialog";
 import { filterSelectedSessionGroupThreads } from "../lib/sessionGroupSelection";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
@@ -2737,6 +2737,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const showJumpHints = useThreadJumpHintsVisible(shouldShowJumpHintsNow);
 
   const handleNewThreadClick = (event?: ReactMouseEvent) => {
+    // With a group selected, a new chat starts in the group's usual project and joins it.
+    const selectedGroup = activeSessionGroups.selectedGroup;
+    if (groupSelection !== null && selectedGroup !== null && !(event?.shiftKey ?? false)) {
+      if (isMobile) setOpenMobile(false);
+      void startSessionGroupChat({
+        environmentId: groupSelection.environmentId,
+        group: selectedGroup,
+        threads,
+        fallbackProjectRef: newThreadContext.defaultProjectRef,
+        startChat: handleNewThread,
+      }).then((started) => {
+        if (!started) openCommandPalette({ open: "new-thread-in" });
+      });
+      return;
+    }
     if (shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, projectGroups.length)) {
       if (isMobile) setOpenMobile(false);
       void startNewThreadFromContext({
@@ -2762,6 +2777,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       <div className="flex min-h-0 flex-1">
         <SessionGroupsRail
           state={sessionGroups}
+          threads={threads}
+          startChat={handleNewThread}
+          fallbackProjectRef={newThreadContext.defaultProjectRef}
           activeThreadRef={
             routeThreadRef !== null &&
             threads.some(

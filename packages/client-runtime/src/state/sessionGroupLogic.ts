@@ -129,3 +129,37 @@ export function deriveSessionGroupCounts(
   }
   return counts;
 }
+
+/** The project a group's chats mostly live in, for starting a new chat there.
+    Ties go to the project with the most recently updated chat; null when the
+    group has no listed chats. */
+export function sessionGroupUsualProjectId<P extends string>(
+  group: Pick<SessionGroup, "threadIds">,
+  threads: ReadonlyArray<{
+    readonly id: ThreadId;
+    readonly projectId: P;
+    readonly updatedAt: string;
+    readonly archivedAt: string | null;
+  }>,
+): P | null {
+  const members = new Set(group.threadIds);
+  const byProject = new Map<P, { count: number; latest: string }>();
+  for (const thread of threads) {
+    if (!members.has(thread.id) || thread.archivedAt !== null) continue;
+    const entry = byProject.get(thread.projectId) ?? { count: 0, latest: "" };
+    byProject.set(thread.projectId, {
+      count: entry.count + 1,
+      latest: thread.updatedAt > entry.latest ? thread.updatedAt : entry.latest,
+    });
+  }
+  let best: { projectId: P; count: number; latest: string } | null = null;
+  for (const [projectId, entry] of byProject) {
+    if (
+      best === null ||
+      entry.count > best.count ||
+      (entry.count === best.count && entry.latest > best.latest)
+    )
+      best = { projectId, ...entry };
+  }
+  return best?.projectId ?? null;
+}

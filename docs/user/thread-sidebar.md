@@ -17,8 +17,13 @@ command palette also clears it. Each group keeps its own color. A number on a
 group counts chats waiting for your approval or input, a dot marks finished
 chats you have not opened, and a small green dot means a chat is working.
 
-On web and desktop, right-click a group to add or remove the open chat, rename,
-reorder, or delete it. On mobile, long-press it. Deleting a group keeps its
+On web and desktop, drag chats from the list onto a group to add them. Right-click
+a group to start a new chat in it, add or remove the open chat, rename, reorder,
+or delete it. On mobile, long-press it.
+
+**New chat** at the top of the list, or **New chat in group** in a group's menu,
+starts in the project most of the group's chats use. The chat joins the group
+when you send its first message. Hold Shift to start a new chat the usual way. Deleting a group keeps its
 chats and files.
 
 Groups and their order are saved on the environment and shared with its

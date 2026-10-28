@@ -3702,7 +3702,11 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
       <SidebarChromeHeader isElectron={isElectron} />
       <LegacySessionGroupContext value={groupContext}>
         <div className="flex min-h-0 flex-1">
-          <SessionGroupsRail state={sessionGroups} />
+          <SessionGroupsRail
+            state={sessionGroups}
+            threads={allThreads}
+            startChat={handleNewThread}
+          />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {sessionGroups.selection !== null && visibleThreads.length === 0 && (
               <p role="status" className="px-3 py-4 text-sm text-muted-foreground">
