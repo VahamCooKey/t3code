@@ -14,8 +14,6 @@ import { resolveScratchProjectScopeKey } from "@t3tools/client-runtime/state/pro
 
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects } from "../../state/entities";
-import { clearSessionGroupSelection } from "../../state/session-group-selection";
-import { useSessionGroupScopeActions } from "../threads/session-groups/use-session-group-list-scope";
 import { environmentThreadShells } from "../../state/threads";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
@@ -144,12 +142,6 @@ export function HomeRouteScreen() {
     setSelectedEnvironmentId,
     setSelectedProjectKey,
   } = useHomeListOptions(availableEnvironmentIds);
-  const { changeEnvironment: changeHeaderEnvironment, changeProject: changeHeaderProject } =
-    useSessionGroupScopeActions({
-      clearSelection: clearSessionGroupSelection,
-      onEnvironmentChange: setSelectedEnvironmentId,
-      onProjectChange: setSelectedProjectKey,
-    });
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
   const projectScopeKey = listOptions.selectedProjectKey;
   const resolvedProjectKey = resolveScratchProjectScopeKey(projectScopeKey, projects, {
@@ -246,8 +238,8 @@ export function HomeRouteScreen() {
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
           selectedProjectKey={selectedProjectKey}
-          onEnvironmentChange={changeHeaderEnvironment}
-          onProjectChange={changeHeaderProject}
+          onEnvironmentChange={setSelectedEnvironmentId}
+          onProjectChange={setSelectedProjectKey}
           onOpenEnvironments={() => openSettings(navigation, "SettingsEnvironments")}
           onOpenSettings={() => selectTab("settings")}
           onSearchQueryChange={setSearchQuery}

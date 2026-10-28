@@ -1,8 +1,3 @@
-import { useMobileSessionGroupEnvironment } from "./session-groups/use-mobile-session-groups";
-import {
-  sessionGroupMembershipMenu,
-  sessionGroupMembershipSelection,
-} from "./session-groups/membership-menu";
 import * as Dialog from "../../components/ui/Dialog";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
@@ -658,14 +653,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const snoozedRow = props.snoozed === true;
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
-  const sessionGroups = useMobileSessionGroupEnvironment(thread.environmentId);
-  const membershipMenu = useMemo(
-    () =>
-      sessionGroups.commands.canUpdate
-        ? sessionGroupMembershipMenu(sessionGroups.groups ?? [], thread.id)
-        : [],
-    [sessionGroups.commands.canUpdate, sessionGroups.groups, thread.id],
-  );
 
   const selectThread = () => onSelectThread(thread);
   const { providerDrivers, providerIconUrl } = useMemo(() => {
@@ -918,23 +905,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
-      const membership = sessionGroupMembershipSelection(
-        sessionGroups.groups ?? [],
-        thread.id,
-        nativeEvent.event,
-      );
-      if (membership) {
-        if (!sessionGroups.commands.canUpdate) return;
-        void sessionGroups.commands
-          .membership(membership.id, membership.threadId, membership.member)
-          .catch((cause: unknown) => {
-            Dialog.alert(
-              "Could not update group",
-              cause instanceof Error ? cause.message : "Try again.",
-            );
-          });
-        return;
-      }
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
@@ -974,7 +944,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [
       onNewThreadOnBranch,
       thread,
-      sessionGroups,
       handleArchive,
       handleDelete,
       handleRegenerateTitle,
@@ -1439,7 +1408,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   ]
                 : []),
               { id: "copy-thread-id", title: "Copy thread ID", image: "doc.on.doc" },
-              ...membershipMenu,
               ...(snoozedRow
                 ? snoozedMenuActions
                 : !props.settlementSupported

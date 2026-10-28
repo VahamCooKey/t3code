@@ -5,6 +5,8 @@ need a separate branch and working directory.
 
 ## Group sessions across projects
 
+Session groups are available on web and desktop.
+
 Use **+** on the group rail beside the thread list to create a group. A new
 group can include the open chat right away. To add any chat later, choose
 **Session groups** in its menu, where you can also create a group and add the
@@ -19,7 +21,7 @@ chats you have not opened, and a small green dot means a chat is working.
 
 On web and desktop, drag chats from the list onto a group to add them. Right-click
 a group to start a new chat in it, add or remove the open chat, rename, reorder,
-or delete it. On mobile, long-press it.
+or delete it.
 
 **New chat** at the top of the list, or **New chat in group** in a group's menu,
 starts in the project most of the group's chats use. The chat joins the group

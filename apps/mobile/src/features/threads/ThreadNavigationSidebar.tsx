@@ -12,8 +12,7 @@ import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { THREAD_SIDEBAR_ROW_LAYOUT } from "./threadListAnimations";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useAtomValue } from "@effect/atom-react";
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
-import { HeaderHeightContext } from "@react-navigation/elements";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LayoutChangeEvent, TextInputInstance } from "react-native";
 import { Platform, StyleSheet, TextInput, View } from "react-native";
 import { GestureDetector, useNativeGesture } from "react-native-gesture-handler";
@@ -59,15 +58,6 @@ import { useFabScroll } from "../home/FabScrollContext";
 import { SidebarFilterButton } from "./sidebar-filter-button";
 import { createSidebarHeaderItems } from "./sidebar-native-header-items";
 import { SidebarNavigationShell } from "./sidebar-navigation-shell";
-import { SessionGroupsPane } from "./session-groups/SessionGroupsPane";
-import { SESSION_GROUP_RAIL_WIDTH } from "./session-groups/SessionGroupRail";
-import { useMobileSessionGroups } from "./session-groups/use-mobile-session-groups";
-import { useSessionGroupListScope } from "./session-groups/use-session-group-list-scope";
-import {
-  sessionGroupEmptyState,
-  sessionGroupListResetKey,
-  sessionGroupPendingTasks,
-} from "./session-groups/list-scope";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
@@ -146,7 +136,6 @@ function ThreadNavigationSidebarPane(
   const drawerColor = materialTheme["--color-drawer"];
 
   const insets = useSafeAreaInsets();
-  const navigationHeaderHeight = useContext(HeaderHeightContext);
   const { fabClearance } = useAndroidControlSizing();
   const projects = useProjects();
   const threads = useNavigationThreadShells();
@@ -188,32 +177,17 @@ function ThreadNavigationSidebarPane(
   );
   const { options, setSelectedEnvironmentId, setSelectedProjectKey } =
     useHomeListOptions(availableEnvironmentIds);
-  const sessionGroups = useMobileSessionGroups(environments, threads);
-  const groupScope = useSessionGroupListScope({
-    selection: sessionGroups.selection,
-    select: sessionGroups.select,
-    environmentId: options.selectedEnvironmentId,
-    projectKey: options.selectedProjectKey,
-    onEnvironmentChange: setSelectedEnvironmentId,
-    onProjectChange: setSelectedProjectKey,
-  });
-  const { changeEnvironment, changeProject } = groupScope;
-  const groupRailWidth =
-    sessionGroups.environments.length > 0 || sessionGroups.selection !== null
-      ? SESSION_GROUP_RAIL_WIDTH
-      : 0;
-
   const searchEnvironmentIds =
-    groupScope.environmentId === null
+    options.selectedEnvironmentId === null
       ? workspaceEnvironments
           .filter((environment) => environment.connectionState === "connected")
           .map((environment) => environment.environmentId)
       : workspaceEnvironments.some(
             (environment) =>
-              environment.environmentId === groupScope.environmentId &&
+              environment.environmentId === options.selectedEnvironmentId &&
               environment.connectionState === "connected",
           )
-        ? [groupScope.environmentId]
+        ? [options.selectedEnvironmentId]
         : [];
   const projectScopeKey = options.selectedProjectKey;
   const resolvedProjectKey = resolveScratchProjectScopeKey(projectScopeKey, projects, {
@@ -229,10 +203,10 @@ function ThreadNavigationSidebarPane(
     () =>
       buildHomeProjectScopes({
         projects,
-        environmentId: groupScope.environmentId,
+        environmentId: options.selectedEnvironmentId,
         projectGroupingMode: options.projectGroupingMode,
       }),
-    [projects, groupScope.environmentId, options.projectGroupingMode],
+    [projects, options.selectedEnvironmentId, options.projectGroupingMode],
   );
   const projectFilterOptions = projectScopes.map((scope) => ({
     key: scope.key,
@@ -254,9 +228,7 @@ function ThreadNavigationSidebarPane(
     [projectScopes],
   );
   const selectedProjectScope =
-    groupScope.projectKey === null
-      ? null
-      : (projectScopes.find((scope) => scope.key === resolvedProjectKey) ?? null);
+    projectScopes.find((scope) => scope.key === resolvedProjectKey) ?? null;
   const threadSearch = useThreadSearch(
     searchEnvironmentIds,
     props.searchQuery,
@@ -279,11 +251,7 @@ function ThreadNavigationSidebarPane(
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = sessionGroupListResetKey(
-    groupScope,
-    sessionGroups.selection,
-    props.searchQuery,
-  );
+  const settledResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
   const [lastSettledResetKey, setLastSettledResetKey] = useState(settledResetKey);
   if (lastSettledResetKey !== settledResetKey) {
     setLastSettledResetKey(settledResetKey);
@@ -331,11 +299,9 @@ function ThreadNavigationSidebarPane(
     contentOnlyThreadKeys,
     olderSettledShelf,
   } = useThreadListV2({
-    threads: sessionGroups.filteredThreads,
-    pendingTasks: sessionGroups.loaded
-      ? sessionGroupPendingTasks(pendingTasks, sessionGroups.selection)
-      : [],
-    environmentId: groupScope.environmentId,
+    threads,
+    pendingTasks,
+    environmentId: options.selectedEnvironmentId,
     projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
     searchQuery: props.searchQuery,
     searchMatches: threadSearchMatchByKey,
@@ -392,13 +358,13 @@ function ThreadNavigationSidebarPane(
           id: "environment:all",
           title: "All environments",
           subtitle: "Show threads from every environment",
-          state: groupScope.environmentId === null ? "on" : "off",
+          state: options.selectedEnvironmentId === null ? "on" : "off",
         },
         ...environments.map((environment) => ({
           id: `environment:${environment.environmentId}`,
           title: environment.label,
           state:
-            groupScope.environmentId === environment.environmentId
+            options.selectedEnvironmentId === environment.environmentId
               ? ("on" as const)
               : ("off" as const),
         })),
@@ -433,24 +399,24 @@ function ThreadNavigationSidebarPane(
   }) => {
     const event = nativeEvent.event;
     if (event === "environment:all") {
-      changeEnvironment(null);
+      setSelectedEnvironmentId(null);
       return;
     }
     if (event.startsWith("environment:")) {
       const environment = environments.find(
         (candidate) => String(candidate.environmentId) === event.slice("environment:".length),
       );
-      if (environment) changeEnvironment(environment.environmentId);
+      if (environment) setSelectedEnvironmentId(environment.environmentId);
       return;
     }
     if (event === "project:all") {
-      changeProject(null);
+      setSelectedProjectKey(null);
       return;
     }
     if (event.startsWith("project:")) {
       const projectKey = event.slice("project:".length);
       if (projectFilterOptions.some((project) => project.key === projectKey)) {
-        changeProject(projectKey);
+        setSelectedProjectKey(projectKey);
       }
       return;
     }
@@ -578,7 +544,7 @@ function ThreadNavigationSidebarPane(
             showPendingDivider={item.showPendingDivider}
             onSelectPendingTask={props.onOpenPendingTask}
             onDeletePendingTask={confirmDeletePendingTask}
-            fullSwipeWidth={props.width - 20 - groupRailWidth}
+            fullSwipeWidth={props.width - 20}
             onSwipeableClose={handleSwipeableClose}
             onSwipeableWillOpen={handleSwipeableWillOpen}
             simultaneousSwipeGesture={sidebarScrollGesture}
@@ -628,7 +594,7 @@ function ThreadNavigationSidebarPane(
               !activeNewTask &&
               scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
             }
-            fullSwipeWidth={props.width - 20 - groupRailWidth}
+            fullSwipeWidth={props.width - 20}
             onSelectThread={handleSelectThread}
             onOpenThreadPullRequests={handleOpenThreadPullRequests}
             onDeleteThread={confirmDeleteThread}
@@ -705,30 +671,23 @@ function ThreadNavigationSidebarPane(
         );
     }
   };
-  const filterCustomized = groupScope.environmentId !== null || selectedProjectKey !== null;
+  const filterCustomized = options.selectedEnvironmentId !== null || selectedProjectKey !== null;
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
     : "line.3.horizontal.decrease.circle";
   const filterMenu = buildHomeListFilterMenu({
     environments,
     projects: projectFilterOptions,
-    selectedEnvironmentId: groupScope.environmentId,
+    selectedEnvironmentId: options.selectedEnvironmentId,
     selectedProjectKey,
-    onEnvironmentChange: changeEnvironment,
-    onProjectChange: changeProject,
+    onEnvironmentChange: setSelectedEnvironmentId,
+    onProjectChange: setSelectedProjectKey,
   });
   const nativeHeaderItems = createSidebarHeaderItems({
     filterIcon,
     filterMenu,
     onOpenSettings: props.onOpenSettings,
   });
-  const groupEmptyState =
-    sessionGroups.selection === null
-      ? null
-      : sessionGroupEmptyState(
-          sessionGroups.selectedGroup?.name ?? "selected group",
-          props.searchQuery,
-        );
   const listEmpty = (
     <Text
       className={
@@ -737,23 +696,17 @@ function ThreadNavigationSidebarPane(
           : "px-2 py-4 text-sm text-drawer-foreground-muted"
       }
     >
-      {!sessionGroups.loaded
-        ? "Loading chats..."
-        : groupEmptyState !== null
-          ? props.searchQuery.trim().length > 0 && threadSearch.isPending
-            ? `Searching chats in ${sessionGroups.selectedGroup?.name ?? "selected group"}...`
-            : groupEmptyState.title
-          : catalogState.isLoadingConnections
-            ? "Loading threads…"
-            : Platform.OS === "android" && !catalogState.hasConnections
-              ? "No environments connected"
-              : props.searchQuery.trim().length > 0
-                ? threadSearch.isPending
-                  ? "Searching thread messages…"
-                  : "No matching threads"
-                : selectedProjectScope !== null
-                  ? `No threads in ${selectedProjectScope.title}`
-                  : "No threads yet"}
+      {catalogState.isLoadingConnections
+        ? "Loading threads…"
+        : Platform.OS === "android" && !catalogState.hasConnections
+          ? "No environments connected"
+          : props.searchQuery.trim().length > 0
+            ? threadSearch.isPending
+              ? "Searching thread messages…"
+              : "No matching threads"
+            : selectedProjectScope !== null
+              ? `No threads in ${selectedProjectScope.title}`
+              : "No threads yet"}
     </Text>
   );
 
@@ -788,50 +741,42 @@ function ThreadNavigationSidebarPane(
           }}
         />
         <View className="flex-1">
-          <SessionGroupsPane
-            state={sessionGroups}
-            threads={threads}
-            onSelect={groupScope.selectGroup}
-            railTopInset={navigationHeaderHeight ?? insets.top}
-            railBottomInset={insets.bottom}
-          >
-            <SwipeableScrollGateProvider enabled={swipeEnabled}>
-              <GestureDetector gesture={sidebarScrollGesture}>
-                <AnimatedLegendList
-                  renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
-                  itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
-                  data={listItems}
-                  drawDistance={500}
-                  estimatedItemSize={64}
-                  extraData={listExtraData}
-                  getItemType={(item) => item.type}
-                  itemsAreEqual={sidebarItemsAreEqual}
-                  keyExtractor={(item) => item.key}
-                  renderItem={renderListItem}
-                  automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
-                  contentInsetAdjustmentBehavior={
-                    NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
-                  }
-                  contentContainerStyle={[
-                    styles.threadListContent,
-                    Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
-                    {
-                      paddingBottom: Math.max(insets.bottom, 16) + 16,
-                      paddingTop: 6,
-                    },
-                  ]}
-                  keyboardDismissMode="on-drag"
-                  keyboardShouldPersistTaps="handled"
-                  {...scrollGateHandlers}
-                  recycleItems
-                  scrollEventThrottle={16}
-                  showsVerticalScrollIndicator={false}
-                  style={styles.threadList}
-                  ListEmptyComponent={listEmpty}
-                />
-              </GestureDetector>
-            </SwipeableScrollGateProvider>
-          </SessionGroupsPane>
+          <SwipeableScrollGateProvider enabled={swipeEnabled}>
+            <GestureDetector gesture={sidebarScrollGesture}>
+              <AnimatedLegendList
+                renderScrollComponent={Platform.OS === "ios" ? NativeScrollView : undefined}
+                itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
+                data={listItems}
+                drawDistance={500}
+                estimatedItemSize={64}
+                extraData={listExtraData}
+                getItemType={(item) => item.type}
+                itemsAreEqual={sidebarItemsAreEqual}
+                keyExtractor={(item) => item.key}
+                renderItem={renderListItem}
+                automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
+                contentInsetAdjustmentBehavior={
+                  NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
+                }
+                contentContainerStyle={[
+                  styles.threadListContent,
+                  Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
+                  {
+                    paddingBottom: Math.max(insets.bottom, 16) + 16,
+                    paddingTop: 6,
+                  },
+                ]}
+                keyboardDismissMode="on-drag"
+                keyboardShouldPersistTaps="handled"
+                {...scrollGateHandlers}
+                recycleItems
+                scrollEventThrottle={16}
+                showsVerticalScrollIndicator={false}
+                style={styles.threadList}
+                ListEmptyComponent={listEmpty}
+              />
+            </GestureDetector>
+          </SwipeableScrollGateProvider>
           <ThreadUndoNotice visible={props.visible} />
         </View>
       </>
@@ -863,52 +808,45 @@ function ThreadNavigationSidebarPane(
             : { paddingBottom: insets.bottom }
         }
       >
-        <SessionGroupsPane
-          state={sessionGroups}
-          threads={threads}
-          onSelect={groupScope.selectGroup}
-          railTopInset={Platform.OS === "android" ? 0 : topListInset}
-        >
-          {Platform.OS === "android" && listItems.length === 0 ? (
-            <View className="flex-1 items-center justify-center">{listEmpty}</View>
-          ) : (
-            <SwipeableScrollGateProvider enabled={swipeEnabled}>
-              <GestureDetector gesture={sidebarScrollGesture}>
-                {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- Only the non-native workspace layout (Android and the fallback) renders this sidebar, which has no native header to register with. */}
-                <AnimatedLegendList
-                  itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
-                  data={listItems}
-                  drawDistance={500}
-                  estimatedItemSize={64}
-                  extraData={listExtraData}
-                  getItemType={(item) => item.type}
-                  itemsAreEqual={sidebarItemsAreEqual}
-                  keyExtractor={(item) => item.key}
-                  renderItem={renderListItem}
-                  contentContainerStyle={[
-                    styles.threadListContent,
-                    Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
-                    {
-                      paddingBottom:
-                        Platform.OS === "android"
-                          ? Math.max(insets.bottom, 16) + fabClearance - insets.bottom
-                          : 16 + insets.bottom,
-                      paddingTop: Platform.OS === "android" ? 6 : topListInset,
-                    },
-                  ]}
-                  keyboardDismissMode="on-drag"
-                  keyboardShouldPersistTaps="handled"
-                  {...scrollGateHandlers}
-                  recycleItems
-                  scrollEventThrottle={16}
-                  showsVerticalScrollIndicator={false}
-                  style={styles.threadList}
-                  ListEmptyComponent={listEmpty}
-                />
-              </GestureDetector>
-            </SwipeableScrollGateProvider>
-          )}
-        </SessionGroupsPane>
+        {Platform.OS === "android" && listItems.length === 0 ? (
+          <View className="flex-1 items-center justify-center">{listEmpty}</View>
+        ) : (
+          <SwipeableScrollGateProvider enabled={swipeEnabled}>
+            <GestureDetector gesture={sidebarScrollGesture}>
+              {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- Only the non-native workspace layout (Android and the fallback) renders this sidebar, which has no native header to register with. */}
+              <AnimatedLegendList
+                itemLayoutAnimation={THREAD_SIDEBAR_ROW_LAYOUT}
+                data={listItems}
+                drawDistance={500}
+                estimatedItemSize={64}
+                extraData={listExtraData}
+                getItemType={(item) => item.type}
+                itemsAreEqual={sidebarItemsAreEqual}
+                keyExtractor={(item) => item.key}
+                renderItem={renderListItem}
+                contentContainerStyle={[
+                  styles.threadListContent,
+                  Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
+                  {
+                    paddingBottom:
+                      Platform.OS === "android"
+                        ? Math.max(insets.bottom, 16) + fabClearance - insets.bottom
+                        : 16 + insets.bottom,
+                    paddingTop: Platform.OS === "android" ? 6 : topListInset,
+                  },
+                ]}
+                keyboardDismissMode="on-drag"
+                keyboardShouldPersistTaps="handled"
+                {...scrollGateHandlers}
+                recycleItems
+                scrollEventThrottle={16}
+                showsVerticalScrollIndicator={false}
+                style={styles.threadList}
+                ListEmptyComponent={listEmpty}
+              />
+            </GestureDetector>
+          </SwipeableScrollGateProvider>
+        )}
       </View>
 
       {Platform.OS === "android" ? (
