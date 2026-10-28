@@ -7,13 +7,13 @@ import { SymbolView } from "../../../components/ui/AppSymbol";
 import { cn } from "../../../lib/cn";
 import { useEnvironmentScope } from "../../../state/session";
 import {
-  sessionGroupAbbreviation,
-  sessionGroupStatusCounts,
-  type SessionGroupSelection,
-} from "./selection";
+  sessionGroupBadgeLabel,
+  sessionGroupHue,
+} from "@t3tools/client-runtime/state/sessionGroupLogic";
+import { sessionGroupStatusCounts, type SessionGroupSelection } from "./selection";
 import type { MobileSessionGroupEditor, MobileSessionGroupEnvironment } from "./types";
 
-export const SESSION_GROUP_RAIL_WIDTH = 76;
+export const SESSION_GROUP_RAIL_WIDTH = 64;
 
 export const SessionGroupRail = memo(function SessionGroupRail(props: {
   readonly environments: readonly MobileSessionGroupEnvironment[];
@@ -103,21 +103,34 @@ function EnvironmentGroups(props: {
           props.selection?.environmentId === environment.environmentId &&
           props.selection.groupId === group.id;
         const status = counts.get(group.id)!;
+        const hue = sessionGroupHue(group.id);
+        const summary = [
+          `${status.live} ${status.live === 1 ? "chat" : "chats"}`,
+          status.active > 0 ? `${status.active} working` : null,
+          status.waiting > 0 ? `${status.waiting} need you` : null,
+          status.unseen > 0 ? `${status.unseen} unread` : null,
+        ]
+          .filter((part) => part !== null)
+          .join(", ");
         return (
-          <View
-            key={group.id}
-            className={cn("items-center px-1 py-2", selected && "bg-thread-selected")}
-          >
+          <View key={group.id} className="items-center px-1.5 py-1">
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`${group.name}, ${status.active} active, ${status.waiting} waiting`}
+              accessibilityLabel={`${group.name}, ${summary}`}
               accessibilityState={{ selected }}
               accessibilityHint={
                 canUpdate ? "Selects this group. Long press to manage it." : "Selects this group"
               }
-              className="min-h-11 w-full items-center justify-center gap-1"
+              className="h-12 w-full items-center justify-center rounded-xl"
+              style={{
+                backgroundColor: `hsla(${hue}, 65%, 55%, ${selected ? 0.32 : 0.16})`,
+                borderWidth: selected ? 1.5 : 0,
+                borderColor: `hsla(${hue}, 65%, 55%, 0.9)`,
+              }}
               onPress={() =>
-                props.onSelect({ environmentId: environment.environmentId, groupId: group.id })
+                props.onSelect(
+                  selected ? null : { environmentId: environment.environmentId, groupId: group.id },
+                )
               }
               onLongPress={
                 canUpdate
@@ -127,36 +140,32 @@ function EnvironmentGroups(props: {
               }
             >
               <AppText
+                numberOfLines={1}
                 className={cn(
-                  "text-sm font-t3-bold",
-                  selected ? "text-thread-selected-foreground" : "text-drawer-foreground",
+                  "px-0.5 text-sm",
+                  selected ? "font-t3-bold text-drawer-foreground" : "text-drawer-foreground",
                 )}
               >
-                {sessionGroupAbbreviation(group.name)}
+                {sessionGroupBadgeLabel(group.name)}
               </AppText>
-              <AppText
-                className={cn(
-                  "text-center text-xs",
-                  selected ? "text-thread-selected-foreground" : "text-drawer-foreground",
-                )}
-              >
-                {group.name}
-              </AppText>
-              <AppText
-                className={cn(
-                  "text-center text-xs tabular-nums",
-                  selected ? "text-thread-selected-foreground" : "text-drawer-foreground-muted",
-                )}
-              >
-                {status.active} active{"\n"}
-                {status.waiting} waiting
-              </AppText>
+              {status.waiting > 0 ? (
+                <View className="absolute -top-1 -right-1 h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1">
+                  <AppText className="text-3xs font-t3-bold text-white tabular-nums">
+                    {status.waiting > 9 ? "9+" : status.waiting}
+                  </AppText>
+                </View>
+              ) : status.unseen > 0 ? (
+                <View className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-sky-500" />
+              ) : null}
+              {status.active > 0 ? (
+                <View className="absolute right-1.5 bottom-1.5 size-1.5 rounded-full bg-emerald-500" />
+              ) : null}
             </Pressable>
-            {canUpdate && (
+            {selected && canUpdate ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Manage ${group.name}`}
-                className="min-h-11 w-full items-center justify-center"
+                className="min-h-9 w-full items-center justify-center"
                 onPress={() =>
                   props.onEdit({ environmentId: environment.environmentId, groupId: group.id })
                 }
@@ -164,14 +173,10 @@ function EnvironmentGroups(props: {
                 <SymbolView
                   name="ellipsis"
                   size={16}
-                  tintColorClassName={
-                    selected
-                      ? "accent-thread-selected-foreground"
-                      : "accent-drawer-foreground-muted"
-                  }
+                  tintColorClassName="accent-drawer-foreground-muted"
                 />
               </Pressable>
-            )}
+            ) : null}
           </View>
         );
       })}

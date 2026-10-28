@@ -1,10 +1,16 @@
 import { create } from "zustand";
 import { useId, useState } from "react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { sessionGroupContainsThread } from "@t3tools/client-runtime/state/sessionGroupLogic";
+import {
+  sessionGroupBadgeLabel,
+  sessionGroupContainsThread,
+} from "@t3tools/client-runtime/state/sessionGroupLogic";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useSessionGroups } from "../../hooks/useSessionGroups";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { randomUUID } from "../../lib/utils";
+import { sessionGroupTint } from "./SessionGroupsRail";
 import {
   Dialog,
   DialogPopup,
@@ -39,7 +45,38 @@ function SessionGroupMembershipDialog({ threadRef }: { readonly threadRef: Scope
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const id = useId();
+  const newGroupId = useId();
+  const [newGroupName, setNewGroupName] = useState("");
   const close = () => useMembershipRequest.setState({ threadRef: null });
+  const reportFailure = (result: Awaited<ReturnType<typeof state.update>>, fallback: string) => {
+    if (result._tag !== "Failure") return false;
+    const cause = squashAtomCommandFailure(result);
+    setError(cause instanceof Error ? cause.message : fallback);
+    return true;
+  };
+  const createAndAdd = async () => {
+    const name = newGroupName.trim();
+    if (!name || !environment?.canOperate) return;
+    const groupId = randomUUID();
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await state.update({
+        environmentId: threadRef.environmentId,
+        input: { type: "create", id: groupId, name },
+      });
+      if (reportFailure(created, "Could not create the group.")) return;
+      const added = await state.update({
+        environmentId: threadRef.environmentId,
+        input: { type: "membership", id: groupId, threadId: threadRef.threadId, member: true },
+      });
+      if (!reportFailure(added, "Created the group, but could not add this chat.")) {
+        setNewGroupName("");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Dialog
       open
@@ -51,7 +88,7 @@ function SessionGroupMembershipDialog({ threadRef }: { readonly threadRef: Scope
         <DialogHeader>
           <DialogTitle>Session groups</DialogTitle>
           <DialogDescription>
-            Add this session to any number of groups, or remove its memberships.
+            Pick every group this chat belongs to. Changes save immediately.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -63,15 +100,13 @@ function SessionGroupMembershipDialog({ threadRef }: { readonly threadRef: Scope
           {environment?.loaded ? (
             <div className="flex flex-col gap-3">
               {environment.groups.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Create a group using Groups in the sidebar.
-                </p>
+                <p className="text-sm text-muted-foreground">No groups yet. Create one below.</p>
               ) : null}
               {environment.groups.map((group, index) => (
                 <label
                   key={group.id}
                   htmlFor={id + "-" + index}
-                  className="flex items-center gap-2 text-sm"
+                  className="flex items-center gap-2.5 rounded-md px-1 py-1 text-sm hover:bg-accent/50"
                 >
                   <input
                     id={id + "-" + index}
@@ -105,9 +140,39 @@ function SessionGroupMembershipDialog({ threadRef }: { readonly threadRef: Scope
                         .finally(() => setBusy(false));
                     }}
                   />
-                  <span>{group.name}</span>
+                  <span
+                    aria-hidden
+                    style={sessionGroupTint(group.id, true)}
+                    className="flex h-6 min-w-8 items-center justify-center rounded px-1 text-2xs font-semibold"
+                  >
+                    {sessionGroupBadgeLabel(group.name)}
+                  </span>
+                  <span className="truncate">{group.name}</span>
                 </label>
               ))}
+              {environment.canOperate ? (
+                <form
+                  className="mt-1 flex items-center gap-2 border-t border-border pt-3"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void createAndAdd();
+                  }}
+                >
+                  <Input
+                    id={newGroupId}
+                    aria-label="New group name"
+                    placeholder="New group, e.g. FNF"
+                    maxLength={80}
+                    value={newGroupName}
+                    disabled={busy}
+                    className="min-w-0 flex-1"
+                    onChange={(event) => setNewGroupName(event.target.value)}
+                  />
+                  <Button type="submit" variant="outline" disabled={busy || !newGroupName.trim()}>
+                    Create and add
+                  </Button>
+                </form>
+              ) : null}
             </div>
           ) : (
             <p role="status" className="text-sm">

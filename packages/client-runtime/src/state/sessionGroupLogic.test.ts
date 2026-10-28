@@ -6,7 +6,10 @@ import {
   deriveSessionGroupCounts,
   filterSessionGroupThreads,
   sessionGroupAbbreviation,
+  sessionGroupBadgeLabel,
   sessionGroupContainsThread,
+  sessionGroupHue,
+  sessionGroupThreadIsUnseen,
 } from "./sessionGroupLogic.ts";
 
 const asThreadId = (id: string) => id as ThreadId;
@@ -94,8 +97,10 @@ describe("deriveSessionGroupCounts", () => {
     ];
     expect(deriveSessionGroupCounts(groups, threads).get(asGroupId("g1"))).toEqual({
       total: 4,
+      live: 4,
       active: 1,
       waiting: 1,
+      unseen: 0,
     });
   });
 
@@ -110,8 +115,10 @@ describe("deriveSessionGroupCounts", () => {
     ];
     expect(deriveSessionGroupCounts(groups, threads).get(asGroupId("g1"))).toEqual({
       total: 5,
+      live: 5,
       active: 4,
       waiting: 0,
+      unseen: 0,
     });
   });
 
@@ -123,8 +130,20 @@ describe("deriveSessionGroupCounts", () => {
       makeThread("ungrouped", "running"),
     ];
     const counts = deriveSessionGroupCounts(groups, threads);
-    expect(counts.get(asGroupId("g1"))).toEqual({ total: 2, active: 1, waiting: 1 });
-    expect(counts.get(asGroupId("g2"))).toEqual({ total: 1, active: 1, waiting: 0 });
+    expect(counts.get(asGroupId("g1"))).toEqual({
+      total: 2,
+      live: 2,
+      active: 1,
+      waiting: 1,
+      unseen: 0,
+    });
+    expect(counts.get(asGroupId("g2"))).toEqual({
+      total: 1,
+      live: 1,
+      active: 1,
+      waiting: 0,
+      unseen: 0,
+    });
   });
 
   it("counts stale membership toward total only", () => {
@@ -132,8 +151,27 @@ describe("deriveSessionGroupCounts", () => {
     const threads = [makeThread("alive", "idle")];
     expect(deriveSessionGroupCounts(groups, threads).get(asGroupId("g1"))).toEqual({
       total: 2,
+      live: 1,
       active: 0,
       waiting: 0,
+      unseen: 0,
+    });
+  });
+
+  it("counts unseen finished threads unless they are working or waiting", () => {
+    const groups = [makeGroup("g1", "Review", ["done", "busy", "blocked", "seen"])];
+    const threads = [
+      { ...makeThread("done", "completed"), unseen: true },
+      { ...makeThread("busy", "running"), unseen: true },
+      { ...makeThread("blocked", "waiting"), unseen: true },
+      makeThread("seen", "completed"),
+    ];
+    expect(deriveSessionGroupCounts(groups, threads).get(asGroupId("g1"))).toEqual({
+      total: 4,
+      live: 4,
+      active: 1,
+      waiting: 1,
+      unseen: 1,
     });
   });
 
@@ -142,7 +180,58 @@ describe("deriveSessionGroupCounts", () => {
     const counts = deriveSessionGroupCounts(groups, []);
     expect(counts.size).toBe(200);
     for (const group of groups) {
-      expect(counts.get(group.id)).toEqual({ total: 0, active: 0, waiting: 0 });
+      expect(counts.get(group.id)).toEqual({ total: 0, live: 0, active: 0, waiting: 0, unseen: 0 });
     }
+  });
+});
+
+describe("sessionGroupBadgeLabel", () => {
+  it("keeps short codes and abbreviates longer names", () => {
+    expect(sessionGroupBadgeLabel("fnf")).toBe("FNF");
+    expect(sessionGroupBadgeLabel("PP")).toBe("PP");
+    expect(sessionGroupBadgeLabel("Launch planning")).toBe("LP");
+    expect(sessionGroupBadgeLabel("Marketing")).toBe("MAR");
+    expect(sessionGroupBadgeLabel("Client - web build")).toBe("CWB");
+    expect(sessionGroupBadgeLabel("A B")).toBe("AB");
+  });
+});
+
+describe("sessionGroupHue", () => {
+  it("is stable per id and within the color wheel", () => {
+    expect(sessionGroupHue("work")).toBe(sessionGroupHue("work"));
+    expect(sessionGroupHue("work")).not.toBe(sessionGroupHue("home"));
+    for (const id of ["a", "b", "c", "a-very-long-group-id"]) {
+      expect(sessionGroupHue(id)).toBeGreaterThanOrEqual(0);
+      expect(sessionGroupHue(id)).toBeLessThan(360);
+    }
+  });
+});
+
+describe("sessionGroupThreadIsUnseen", () => {
+  const run = (status: string, completedAt: string | null) => ({ status, completedAt });
+  it("compares the latest finished run with the last visit", () => {
+    expect(
+      sessionGroupThreadIsUnseen({
+        latestRun: run("completed", "2026-10-02T00:00:00Z"),
+        lastVisitedAt: "2026-10-01T00:00:00Z",
+      }),
+    ).toBe(true);
+    expect(
+      sessionGroupThreadIsUnseen({
+        latestRun: run("completed", "2026-10-01T00:00:00Z"),
+        lastVisitedAt: "2026-10-02T00:00:00Z",
+      }),
+    ).toBe(false);
+    expect(
+      sessionGroupThreadIsUnseen({ latestRun: run("running", null), lastVisitedAt: null }),
+    ).toBe(false);
+  });
+  it("flags never-opened failures but not never-opened completions", () => {
+    expect(sessionGroupThreadIsUnseen({ latestRun: run("failed", "2026-10-01T00:00:00Z") })).toBe(
+      true,
+    );
+    expect(
+      sessionGroupThreadIsUnseen({ latestRun: run("completed", "2026-10-01T00:00:00Z") }),
+    ).toBe(false);
   });
 });

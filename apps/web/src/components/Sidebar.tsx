@@ -2762,6 +2762,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       <div className="flex min-h-0 flex-1">
         <SessionGroupsRail
           state={sessionGroups}
+          activeThreadRef={
+            routeThreadRef !== null &&
+            threads.some(
+              (thread) =>
+                thread.environmentId === routeThreadRef.environmentId &&
+                thread.id === routeThreadRef.threadId,
+            )
+              ? routeThreadRef
+              : null
+          }
           onSelect={(selection) => {
             setProjectScopeKey(null);
             setGroupSelection(selection);

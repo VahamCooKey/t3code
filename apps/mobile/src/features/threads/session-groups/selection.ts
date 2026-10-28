@@ -7,7 +7,10 @@ import {
 
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 
-import { deriveSessionGroupCounts } from "@t3tools/client-runtime/state/sessionGroupLogic";
+import {
+  deriveSessionGroupCounts,
+  sessionGroupThreadIsUnseen,
+} from "@t3tools/client-runtime/state/sessionGroupLogic";
 
 export { sessionGroupAbbreviation } from "@t3tools/client-runtime/state/sessionGroupLogic";
 
@@ -127,6 +130,7 @@ export function sessionGroupStatusCounts(
           thread.hasPendingApprovals || thread.hasPendingUserInput
             ? "waiting"
             : (thread.runtime?.status ?? "stopped"),
+        unseen: sessionGroupThreadIsUnseen(thread),
       })),
   );
 }

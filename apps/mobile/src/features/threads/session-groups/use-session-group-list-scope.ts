@@ -39,6 +39,7 @@ export function useSessionGroupListScope(props: {
   const { selection, select, environmentId, projectKey, onEnvironmentChange, onProjectChange } =
     props;
   const previous = useRef({ selection, environmentId, projectKey });
+  // oxlint-disable-next-line t3code/react-effect-budget -- scope changes also arrive from saved list options and other screens, which have no handler here.
   useEffect(() => {
     const current = { selection, environmentId, projectKey };
     const clear = sessionGroupSelectionShouldClear(previous.current, current);

@@ -5,19 +5,24 @@ need a separate branch and working directory.
 
 ## Group sessions across projects
 
-Create a session group from the group rail beside the thread list. Add sessions
-through **Session groups** in a thread's menu. A group can
-include sessions from different projects, folders, and providers on the same
-environment, and a session can belong to several groups. There is no group limit.
+Use **+** on the group rail beside the thread list to create a group. A new
+group can include the open chat right away. To add any chat later, choose
+**Session groups** in its menu, where you can also create a group and add the
+chat in one step. A group can include chats from different projects, folders,
+and providers on the same environment, and a chat can belong to several groups.
 
-Select a group to filter the list, and choose **All** to clear the filter. The rail
-uses three-letter badges; each badge also exposes the full group name. Manage a
-group to rename it, change its membership, move it up or down, or delete it.
-Deleting a group keeps its sessions and files.
+Select a group to filter the list. Select it again, or choose **All**, to clear
+the filter. Opening a chat outside the group from history, a link, or the
+command palette also clears it. Each group keeps its own color. A number on a
+group counts chats waiting for your approval or input, a dot marks finished
+chats you have not opened, and a small green dot means a chat is working.
 
-Groups and their order are saved on the environment and shared with its connected
-clients. Each device keeps its own selected filter. Update older environment
-servers if their groups are unavailable.
+On web and desktop, right-click a group to add or remove the open chat, rename,
+reorder, or delete it. On mobile, long-press it. Deleting a group keeps its
+chats and files.
+
+Groups and their order are saved on the environment and shared with its
+connected clients. Each device keeps its own selected filter.
 
 ## Start a thread
 

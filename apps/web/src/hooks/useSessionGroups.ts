@@ -1,6 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import { createSessionGroupsAtoms } from "@t3tools/client-runtime/state/sessionGroups";
-import { deriveSessionGroupCounts } from "@t3tools/client-runtime/state/sessionGroupLogic";
+import {
+  deriveSessionGroupCounts,
+  sessionGroupThreadIsUnseen,
+} from "@t3tools/client-runtime/state/sessionGroupLogic";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   AuthOrchestrationReadScope,
@@ -19,6 +22,9 @@ import { environmentSession } from "../state/session";
 import { environmentServerConfigsAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useLocalStorage } from "./useLocalStorage";
+import { useUiStateStore } from "../uiStateStore";
+import { resolveThreadLastVisitedAt } from "../components/Sidebar.logic";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   sessionGroupSelectionWasDeleted,
   type SessionGroupSelection,
@@ -62,11 +68,13 @@ const groupsStateAtom = Atom.make((get) => {
 
 export function useSessionGroups(threads: readonly EnvironmentThreadShell[]) {
   const state = useAtomValue(groupsStateAtom);
+  const localLastVisitedAtById = useUiStateStore((store) => store.threadLastVisitedAtById);
   const [selection, setSelection] = useLocalStorage(
     "t3code:session-group-selection",
     null as SessionGroupSelection | null,
     selectionSchema,
   );
+  // oxlint-disable-next-line t3code/react-effect-budget -- a group deleted on another client arrives through the subscription, so no local handler can clear the stored selection.
   useEffect(() => {
     if (sessionGroupSelectionWasDeleted(selection, state.snapshots)) setSelection(null);
   }, [selection, setSelection, state.snapshots]);
@@ -82,6 +90,15 @@ export function useSessionGroups(threads: readonly EnvironmentThreadShell[]) {
           thread.hasPendingApprovals || thread.hasPendingUserInput
             ? "waiting"
             : (thread.runtime?.status ?? "stopped"),
+        unseen: sessionGroupThreadIsUnseen({
+          latestRun: thread.latestRun,
+          lastVisitedAt: resolveThreadLastVisitedAt(
+            thread.lastVisitedAt,
+            localLastVisitedAtById[
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+            ],
+          ),
+        }),
       })),
     );
     return environment.groups.map((group) => ({
